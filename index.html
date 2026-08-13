@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0f172a">
 <title>筋トレ日誌 PWA v3.1</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<link rel="apple-touch-icon" href="./icons/icon-180.png">
+<link rel="apple-touch-icon" href="./icon-180.png">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -328,6 +328,8 @@ const DB_VERSION = 2;
 const DAY_STORE = "days";
 const META_STORE = "meta";
 const LAST_BACKUP_KEY = "lastBackupAt";
+const LAST_DATA_CHANGE_KEY = "lastDataChangeAt";
+const LEGACY_MIGRATED_KEY = "workoutMemoApp.indexedDbMigratedAt";
 const BACKUP_WARN_DAYS = 10;
 let dbPromise = null;
 const saveTimers = new Map();
@@ -381,25 +383,32 @@ function legacyLocalStorageDays(){
     return x&&typeof x==="object"?x:{};
   }catch{return{};}
 }
+function legacyMigrationCompleted(){
+  try{return Boolean(localStorage.getItem(LEGACY_MIGRATED_KEY));}catch{return false;}
+}
 async function loadAll(){
   let days={};
   try{days=await idbLoadAll();}catch(err){console.error(err);throw err;}
-  if(Object.keys(days).length)return days;
+  if(Object.keys(days).length){
+    try{localStorage.setItem(LEGACY_MIGRATED_KEY,new Date().toISOString());}catch(_){}
+    return days;
+  }
 
+  if(legacyMigrationCompleted())return {};
   const legacy=legacyLocalStorageDays();
   if(Object.keys(legacy).length){
     await idbReplaceAll(legacy);
-    try{localStorage.setItem("workoutMemoApp.indexedDbMigratedAt",new Date().toISOString());}catch(_){}
-    return legacy;
   }
-  return {};
+  try{localStorage.setItem(LEGACY_MIGRATED_KEY,new Date().toISOString());}catch(_){}
+  return legacy;
 }
 async function idbPutDay(day){
   if(!day?.date)return;
   const db=await openDb();
   return new Promise((resolve,reject)=>{
-    const tx=db.transaction(DAY_STORE,"readwrite");
+    const tx=db.transaction([DAY_STORE,META_STORE],"readwrite");
     tx.objectStore(DAY_STORE).put(day);
+    tx.objectStore(META_STORE).put({key:LAST_DATA_CHANGE_KEY,value:new Date().toISOString()});
     tx.oncomplete=()=>resolve();
     tx.onerror=()=>reject(tx.error||new Error("IndexedDBへの保存に失敗しました"));
     tx.onabort=()=>reject(tx.error||new Error("IndexedDBへの保存が中断されました"));
@@ -408,8 +417,9 @@ async function idbPutDay(day){
 async function idbDeleteDay(date){
   const db=await openDb();
   return new Promise((resolve,reject)=>{
-    const tx=db.transaction(DAY_STORE,"readwrite");
+    const tx=db.transaction([DAY_STORE,META_STORE],"readwrite");
     tx.objectStore(DAY_STORE).delete(date);
+    tx.objectStore(META_STORE).put({key:LAST_DATA_CHANGE_KEY,value:new Date().toISOString()});
     tx.oncomplete=()=>resolve();
     tx.onerror=()=>reject(tx.error||new Error("IndexedDBから削除できませんでした"));
   });
@@ -433,13 +443,14 @@ async function idbSetMeta(key,value){
   });
 }
 
-async function idbReplaceAll(days){
+async function idbReplaceAll(days,{markChanged=false}={}){
   const db=await openDb();
   return new Promise((resolve,reject)=>{
-    const tx=db.transaction(DAY_STORE,"readwrite");
+    const tx=db.transaction(markChanged?[DAY_STORE,META_STORE]:DAY_STORE,"readwrite");
     const store=tx.objectStore(DAY_STORE);
     store.clear();
     Object.values(days||{}).forEach(day=>{if(day?.date)store.put(day);});
+    if(markChanged)tx.objectStore(META_STORE).put({key:LAST_DATA_CHANGE_KEY,value:new Date().toISOString()});
     tx.oncomplete=()=>resolve();
     tx.onerror=()=>reject(tx.error||new Error("IndexedDBの一括保存に失敗しました"));
     tx.onabort=()=>reject(tx.error||new Error("IndexedDBの一括保存が中断されました"));
@@ -450,10 +461,11 @@ function persistNow(day=currentDay()){
     console.error(err);
     $("saveStatus").textContent="保存エラー";
     showToast("保存に失敗しました。一括出力でバックアップしてください");
+    throw err;
   });
 }
-function persistAllNow(){
-  return idbReplaceAll(state.days).catch(err=>{
+function persistAllNow({markChanged=true}={}){
+  return idbReplaceAll(recordedDaysObject(),{markChanged}).catch(err=>{
     console.error(err);
     $("saveStatus").textContent="保存エラー";
     showToast("一括保存に失敗しました");
@@ -467,6 +479,16 @@ function cancelPendingSave(date){
 function cancelAllPendingSaves(){
   for(const timer of saveTimers.values())clearTimeout(timer);
   saveTimers.clear();
+}
+async function flushPendingSaves(){
+  const dates=[...saveTimers.keys()];
+  dates.forEach(cancelPendingSave);
+  await Promise.all(dates.map(async date=>{
+    const day=state.days[date];
+    if(!day)return;
+    day.updatedAt=new Date().toISOString();
+    await persistNow(day);
+  }));
 }
 function blankSet(){ return {id:uid(),weight:"",reps:"",time:"",rpe:"",rest:"",note:""}; }
 function blankBody(){ return {id:uid(),part:"",exercises:"",sets:""}; }
@@ -491,6 +513,13 @@ function migrateAll(){
 }
 function normalizeSet(s){ return {id:s?.id||uid(),weight:s?.weight??"",reps:s?.reps??"",time:String(s?.time||""),rpe:s?.rpe??"",rest:s?.rest??"",note:String(s?.note||"")}; }
 function currentDay(){ if(!state.days[state.date])state.days[state.date]=blankDay(state.date);return state.days[state.date]; }
+function hasMeaningfulDayData(day){
+  if(!day)return false;
+  const values=[day.meta?.target,day.meta?.basicPolicy,day.meta?.trainingStart,day.meta?.trainingEnd,day.meta?.theme,day.pre?.sleep?.start,day.pre?.sleep?.end,day.pre?.nap?.start,day.pre?.nap?.end,day.pre?.meal?.time,day.pre?.meal?.note,day.daySummary];
+  return values.some(v=>String(v??"").trim()!=="")||(Array.isArray(day.exercises)&&day.exercises.length>0);
+}
+function recordedDays(){return Object.values(state.days).filter(hasMeaningfulDayData);}
+function recordedDaysObject(){return Object.fromEntries(recordedDays().map(day=>[day.date,day]));}
 
 function save(){
   const day=currentDay();
@@ -498,10 +527,15 @@ function save(){
   cancelPendingSave(day.date);
   const timer=setTimeout(async()=>{
     day.updatedAt=new Date().toISOString();
-    await persistNow(day);
-    saveTimers.delete(day.date);
-    $("saveStatus").textContent="保存済み";
-    renderSidebar();
+    try{
+      await persistNow(day);
+      $("saveStatus").textContent="保存済み";
+      renderSidebar();
+    }catch(_){
+      // persistNow already reports the error to the user.
+    }finally{
+      saveTimers.delete(day.date);
+    }
   },120);
   saveTimers.set(day.date,timer);
 }
@@ -544,7 +578,7 @@ function allSetsForExercise(name,excludeCurrent=false){
     if(excludeCurrent&&d.date===state.date)return;
     (d.exercises||[]).forEach(ex=>{
       if(normalizeName(ex.name)!==key)return;
-      PHASES.forEach(([phase])=>(ex.blocks?.[phase]||[]).forEach(s=>out.push({day:d,phase,set:s})));
+      (ex.blocks?.main||[]).forEach(s=>out.push({day:d,phase:"main",set:s}));
     });
   });
   return out;
@@ -590,7 +624,7 @@ function refreshDatalist(){
 
 function renderSidebar(){
   const q=$("globalSearch").value.trim().toLocaleLowerCase("ja-JP");
-  const all=Object.values(state.days).sort((a,b)=>b.date.localeCompare(a.date));
+  const all=recordedDays().sort((a,b)=>b.date.localeCompare(a.date));
   const filtered=q?all.filter(d=>searchText(d).includes(q)):all;
   $("searchMeta").textContent=q?`${filtered.length}件 / 全${all.length}日`:`全${all.length}日`;
   $("dayList").innerHTML=filtered.length?filtered.map(d=>`
@@ -678,7 +712,7 @@ function renderPhase(ex,phase,label){
           </div>
           <div class="field timeWrap">
             <span class="fieldLabel">時刻${phase==="main"?" / RPE":""}</span>
-            <input class="input timeInput" type="time" data-action="set-time" data-exid="${ex.id}" data-phase="${phase}" data-setid="${s.id}" value="${esc(s.time)}">
+            <input class="input timeInput" type="time" step="300" data-action="set-time" data-exid="${ex.id}" data-phase="${phase}" data-setid="${s.id}" value="${esc(s.time)}">
             ${phase==="main"?`<input class="input" style="margin-top:6px" type="number" inputmode="decimal" step="0.5" min="1" max="10" data-action="set-rpe" data-exid="${ex.id}" data-phase="${phase}" data-setid="${s.id}" value="${esc(s.rpe)}" placeholder="RPE">`:""}
           </div>
           <div class="field restWrap">
@@ -761,11 +795,10 @@ function addExercise(name=""){
   const day=currentDay();
   day.exercises.push(ex);
   day.updatedAt=new Date().toISOString();
-  persistNow();
+  save();
   renderExercises();
   renderBodyTotals();
   renderSidebar();
-  $("saveStatus").textContent="保存済み";
   showToast("種目を追加しました");
   setTimeout(()=>document.querySelector(`[data-action="exercise-name"][data-exid="${ex.id}"]`)?.focus(),50);
 }
@@ -844,9 +877,9 @@ $("clearDay").addEventListener("click",async()=>{
   if(!confirm(`${state.date} の記録をすべて削除しますか？`))return;
   const date=state.date;
   cancelPendingSave(date);
-  delete state.days[date];
   try{
     await idbDeleteDay(date);
+    delete state.days[date];
     renderDay();
     showToast("削除しました");await refreshStorageInfo();
   }catch(err){
@@ -871,17 +904,52 @@ function dayHumanText(day){
   day.exercises.forEach((ex,i)=>{lines.push(`■ 種目: ${ex.name||`種目${i+1}`}`,`メイン部位: ${ex.mainTarget||"—"}`,`サブ部位: ${ex.subTarget||"—"}`,`注意: ${ex.caution?"あり":"なし"}`,"[種目のコツ]",ex.tips||"");PHASES.forEach(([p,l])=>{lines.push("",`[${l}]`);(ex.blocks[p]||[]).forEach((set,j)=>{lines.push(`${j+1}セット目: ${set.weight===""?"—":set.weight+"kg"} × ${set.reps===""?"—":set.reps+"回"} / 時刻 ${set.time||"—"}${p==="main"&&set.rpe!==""?` / RPE ${set.rpe}`:""} / レスト ${set.rest===""?"—":set.rest+"分"}`);if(set.note)lines.push(`  メモ: ${set.note.replace(/\n/g,"\n  ")}`);});});lines.push("");});
   lines.push(JSON_BEGIN,JSON.stringify({version:6,day},null,2),JSON_END);return lines.join("\n");
 }
-function allHumanText(){const days=Object.values(state.days).sort((a,b)=>a.date.localeCompare(b.date)),lines=[MAGIC_ALL,`出力日: ${todayLocal()}`,`記録日数: ${days.length}`,""];days.forEach(day=>{lines.push("==================================================",`${day.date} ${composedTitle(day)}`,"==================================================","",dayHumanText(day).split(JSON_BEGIN)[0].replace(MAGIC_DAY+"\n","").trim(),"")});lines.push(JSON_BEGIN,JSON.stringify({version:6,days:state.days},null,2),JSON_END);return lines.join("\n");}
+function allHumanText(){const days=recordedDays().sort((a,b)=>a.date.localeCompare(b.date)),exportDays=Object.fromEntries(days.map(day=>[day.date,day])),lines=[MAGIC_ALL,`出力日: ${todayLocal()}`,`記録日数: ${days.length}`,""];days.forEach(day=>{lines.push("==================================================",`${day.date} ${composedTitle(day)}`,"==================================================","",dayHumanText(day).split(JSON_BEGIN)[0].replace(MAGIC_DAY+"\n","").trim(),"")});lines.push(JSON_BEGIN,JSON.stringify({version:6,days:exportDays},null,2),JSON_END);return lines.join("\n");}
+function isPlainObject(value){return Boolean(value)&&typeof value==="object"&&!Array.isArray(value);}
+function isValidDateKey(value){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(value))return false;
+  const [y,m,d]=value.split("-").map(Number),date=new Date(Date.UTC(y,m-1,d));
+  return date.getUTCFullYear()===y&&date.getUTCMonth()===m-1&&date.getUTCDate()===d;
+}
+function validateDayRecord(raw,date){
+  if(!isPlainObject(raw)||raw.date!==date||!isValidDateKey(date))throw new Error(`${date} の日付またはレコード形式が不正です`);
+  if(Number(raw.version||6)>6)throw new Error(`${date} は未対応のVersionです`);
+  if(raw.exercises!=null&&!Array.isArray(raw.exercises))throw new Error(`${date} の種目データが不正です`);
+}
+function parseImportPayload(text,mode){
+  const firstLine=text.replace(/^\uFEFF/,"").split(/\r?\n/,1)[0].trim();
+  const expected=mode==="all"?MAGIC_ALL:MAGIC_DAY;
+  if(firstLine!==expected)throw new Error("選択した取込種別とTXTの識別子が一致しません");
+  const start=text.indexOf(JSON_BEGIN),end=text.indexOf(JSON_END,start+JSON_BEGIN.length);
+  if(start<0||end<=start)throw new Error("復元用データが見つかりません");
+  const payload=JSON.parse(text.slice(start+JSON_BEGIN.length,end).trim());
+  if(!isPlainObject(payload)||Number(payload.version)!==6)throw new Error("Version 6形式ではありません");
+  if(mode==="all"){
+    if(!isPlainObject(payload.days))throw new Error("一括バックアップ形式ではありません");
+    Object.keys(payload.days).forEach(date=>validateDayRecord(payload.days[date],date));
+  }else{
+    validateDayRecord(payload.day,payload.day?.date);
+  }
+  return payload;
+}
 function downloadText(text,filename){
   const blob=new Blob([text],{type:"text/plain;charset=utf-8"}),url=URL.createObjectURL(blob),a=document.createElement("a");
   a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 $("exportDay").addEventListener("click",()=>{const d=currentDay(),safe=(composedTitle(d)||"記録").replace(/[\/:*?"<>|]/g,"_");downloadText(dayHumanText(d),`筋トレ日誌_${d.date}_${safe}.txt`);showToast("この日を出力しました");});
 $("exportAll").addEventListener("click",async()=>{
+  let saveFailed=false;
+  try{await flushPendingSaves();}catch(err){console.error(err);saveFailed=true;}
   downloadText(allHumanText(),`筋トレ日誌_全データ_${todayLocal()}.txt`);
-  try{await idbSetMeta(LAST_BACKUP_KEY,new Date().toISOString());}catch(err){console.warn(err);}
+  const confirmed=confirm("ダウンロードしたバックアップファイルが端末に保存されたことを確認しましたか？");
+  if(confirmed){
+    try{await idbSetMeta(LAST_BACKUP_KEY,new Date().toISOString());}catch(err){console.warn(err);}
+    showToast("全データを一括出力しました");
+  }else{
+    showToast("バックアップ日時は更新していません");
+  }
   await refreshStorageInfo();
-  showToast("全データを一括出力しました");
+  if(saveFailed)alert("IndexedDBへの保存に失敗しましたが、現在の画面上のデータはTXTへ出力しました。ファイルを安全な場所に保管してください。");
 });
 
 $("refreshStorageInfo")?.addEventListener("click",refreshStorageInfo);
@@ -891,19 +959,17 @@ $("importAll").addEventListener("click",()=>{state.importMode="all";$("importFil
 $("importFile").addEventListener("change",async e=>{
   const file=e.target.files?.[0];e.target.value="";if(!file)return;
   try{
-    const text=await file.text(),s=text.indexOf(JSON_BEGIN),en=text.indexOf(JSON_END);
-    if(s<0||en<=s)throw new Error("復元用データが見つかりません");
-    const payload=JSON.parse(text.slice(s+JSON_BEGIN.length,en).trim());
+    const text=await file.text(),payload=parseImportPayload(text,state.importMode);
     if(state.importMode==="all"){
       cancelAllPendingSaves();
       const incoming=payload.days;
-      if(!incoming||typeof incoming!=="object")throw new Error("一括バックアップ形式ではありません");
+      const previousDays={...state.days};
 
       const dates=Object.keys(incoming).sort();
       let added=0, overwritten=0, skipped=0;
 
       for(const date of dates){
-        const exists=Object.prototype.hasOwnProperty.call(state.days,date);
+        const exists=hasMeaningfulDayData(state.days[date]);
         if(!exists){
           state.days[date]=incoming[date];
           added++;
@@ -928,17 +994,19 @@ $("importFile").addEventListener("change",async e=>{
       }
 
       migrateAll();
-      await persistAllNow();
+      try{await persistAllNow();}catch(err){state.days=previousDays;throw err;}
       const importedDates=dates.filter(d=>state.days[d]);
       if(importedDates.length) state.date=importedDates.sort().reverse()[0];
 
       renderDay();
       showToast(`追加 ${added}日 / 上書き ${overwritten}日 / 保持 ${skipped}日`);await refreshStorageInfo();
     }else{
-      const raw=payload.day;if(!raw||typeof raw.date!=="string")throw new Error("1日分のデータ形式ではありません");
+      const raw=payload.day;
+      if(hasMeaningfulDayData(state.days[raw.date])&&!confirm(`${raw.date} の既存記録をインポート内容で上書きしますか？`))return;
       cancelPendingSave(raw.date);
-      const tmp={};tmp[raw.date]=raw;const old=state.days;state.days={...old,...tmp};migrateAll();
-      await idbPutDay(state.days[raw.date]);
+      const hadPrevious=Object.prototype.hasOwnProperty.call(state.days,raw.date),previous=state.days[raw.date];
+      const tmp={};tmp[raw.date]=raw;state.days={...state.days,...tmp};migrateAll();
+      try{await idbPutDay(state.days[raw.date]);}catch(err){if(hadPrevious)state.days[raw.date]=previous;else delete state.days[raw.date];throw err;}
       state.date=raw.date;renderDay();showToast(`${raw.date} をインポートしました`);await refreshStorageInfo();
     }
   }catch(err){alert(`インポートできませんでした。\n${err.message}`);}
@@ -957,12 +1025,17 @@ function formatBytes(bytes){
   return `${n.toFixed(digits)} ${units[i]}`;
 }
 function recordDataApproxBytes(){
-  try{return new Blob([JSON.stringify(state.days)]).size;}catch{return NaN;}
+  try{return new Blob([JSON.stringify(recordedDaysObject())]).size;}catch{return NaN;}
 }
 function daysSinceIso(iso){
   if(!iso)return Infinity;
   const t=new Date(iso).getTime();
   return Number.isFinite(t)?Math.floor((Date.now()-t)/86400000):Infinity;
+}
+function backupState(last,changed){
+  const backupTime=new Date(last||0).getTime(),changeTime=new Date(changed||0).getTime();
+  const current=Boolean(last)&&Number.isFinite(backupTime)&&(!changed||(Number.isFinite(changeTime)&&backupTime>=changeTime));
+  return {elapsed:daysSinceIso(last),current,changedAfterBackup:Boolean(changed)&&!current};
 }
 function formatBackupDate(iso){
   if(!iso)return "未実施";
@@ -979,7 +1052,7 @@ async function ensurePersistentStorage(){
 }
 async function refreshStorageInfo(){
   if($("recordDataSize"))$("recordDataSize").textContent=formatBytes(recordDataApproxBytes());
-  if($("storageDays"))$("storageDays").textContent=`${Object.keys(state.days).length}日`;
+  if($("storageDays"))$("storageDays").textContent=`${recordedDays().length}日`;
   try{
     const est=await navigator.storage?.estimate?.();
     if($("storageUsage"))$("storageUsage").textContent=formatBytes(est?.usage??NaN);
@@ -989,26 +1062,30 @@ async function refreshStorageInfo(){
     const persistent=await navigator.storage?.persisted?.();
     if($("storagePersistent"))$("storagePersistent").textContent=persistent?"有効":"未許可";
   }catch{if($("storagePersistent"))$("storagePersistent").textContent="確認不可";}
-  let last=null;
-  try{last=await idbGetMeta(LAST_BACKUP_KEY);}catch(err){console.warn(err);}
+  let last=null,changed=null;
+  try{[last,changed]=await Promise.all([idbGetMeta(LAST_BACKUP_KEY),idbGetMeta(LAST_DATA_CHANGE_KEY)]);}catch(err){console.warn(err);}
   if($("lastBackupAt"))$("lastBackupAt").textContent=formatBackupDate(last);
-  const elapsed=daysSinceIso(last),warn=$("backupWarning");
+  const backup=backupState(last,changed),warn=$("backupWarning");
   if(warn){
-    if(elapsed>=BACKUP_WARN_DAYS){
+    if(backup.changedAfterBackup||backup.elapsed>=BACKUP_WARN_DAYS){
       warn.classList.add("show");
-      warn.textContent=last
-        ? `最終一括バックアップから ${elapsed} 日経過しています。「すべてのデータを一括出力」でバックアップしてください。`
+      warn.textContent=backup.changedAfterBackup
+        ? `一括バックアップ後に記録が変更されています。「すべてのデータを一括出力」で最新状態をバックアップしてください。`
+        : last
+        ? `最終一括バックアップから ${backup.elapsed} 日経過しています。「すべてのデータを一括出力」でバックアップしてください。`
         : `まだ一括バックアップ履歴がありません。「すべてのデータを一括出力」でバックアップしてください。`;
     }else{warn.classList.remove("show");warn.textContent="";}
   }
 }
 async function deleteAllWorkoutData(){
-  let last="";
-  try{last=localStorage.getItem(LAST_BACKUP_KEY)||"";}catch(_){}
-  const elapsed=daysSince(last);
+  let last="",changed="";
+  try{[last,changed]=await Promise.all([idbGetMeta(LAST_BACKUP_KEY),idbGetMeta(LAST_DATA_CHANGE_KEY)]);}catch(err){console.warn(err);}
+  const backup=backupState(last,changed);
 
-  if(!last || elapsed>=BACKUP_WARN_DAYS){
-    alert("全記録を削除できません。一括データ出力でバックアップを取ってください");
+  if(!backup.current || backup.elapsed>=BACKUP_WARN_DAYS){
+    alert(backup.current
+      ? "全記録を削除できません。最終一括バックアップから10日以上経過しています。"
+      : "全記録を削除できません。最新の一括データ出力でバックアップを取ってください。");
     return;
   }
 
@@ -1019,7 +1096,7 @@ async function deleteAllWorkoutData(){
   const ok=confirm(
     `最終一括バックアップ：${lastText}
 ` +
-    `（${elapsed}日前）
+    `（${backup.elapsed}日前）
 
 ` +
     `バックアップから10日以内です。
@@ -1029,9 +1106,9 @@ async function deleteAllWorkoutData(){
   if(!ok)return;
 
   cancelAllPendingSaves();
-  state.days={};
   try{
-    await idbReplaceAll({});
+    await idbReplaceAll({},{markChanged:true});
+    state.days={};
     state.date=todayLocal();
     renderDay();
     await refreshStorageInfo();
@@ -1086,7 +1163,8 @@ async function initApp(){
   try{
     state.days=await loadAll();
     migrateAll();
-    if(Object.keys(state.days).length)await persistAllNow();
+    if(Object.keys(state.days).length)await persistAllNow({markChanged:false});
+    if(recordedDays().length&&!await idbGetMeta(LAST_DATA_CHANGE_KEY))await idbSetMeta(LAST_DATA_CHANGE_KEY,new Date().toISOString());
     $("saveStatus").textContent="IndexedDB保存";
     renderDay();
     await ensurePersistentStorage();
@@ -1097,6 +1175,7 @@ async function initApp(){
     alert("保存データを読み込めませんでした。ブラウザのIndexedDBが利用可能か確認してください。");
   }
 }
+window.addEventListener("pagehide",()=>{void flushPendingSaves().catch(err=>console.error("final save failed",err));});
 initApp();
 })();
 </script>

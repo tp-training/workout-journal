@@ -50,8 +50,9 @@ button{cursor:pointer}
   padding:9px 10px
 }
 .dayItem:hover{background:var(--panel2)}
-.dayItem.active{background:var(--panel2);border-color:var(--line)}
+.dayItem.active{background:var(--blueBg);border-color:var(--blue);box-shadow:inset 4px 0 0 var(--blue)}
 .dayDate{font-size:13px;font-weight:900}.dayTitleSide{font-size:12px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dayCount{font-size:10px;color:var(--blue);font-weight:900;margin-left:5px}
 .sideActions{display:grid;gap:7px;border-top:1px solid var(--line);padding-top:10px}
 .sideActions2{display:grid;grid-template-columns:1fr 1fr;gap:7px}
 .main{margin-left:var(--sidebar);min-height:100vh}
@@ -280,7 +281,7 @@ button{cursor:pointer}
           <div class="storageStat"><div class="subLabel">記録データ概算</div><div class="storageValue" id="recordDataSize">—</div></div>
           <div class="storageStat"><div class="subLabel">サイト使用量</div><div class="storageValue" id="storageUsage">—</div></div>
           <div class="storageStat"><div class="subLabel">推定上限</div><div class="storageValue" id="storageQuota">—</div></div>
-          <div class="storageStat"><div class="subLabel">記録日数</div><div class="storageValue" id="storageDays">—</div></div>
+          <div class="storageStat"><div class="subLabel">記録件数</div><div class="storageValue" id="storageDays">—</div></div>
           <div class="storageStat"><div class="subLabel">永続ストレージ</div><div class="storageValue" id="storagePersistent">確認中</div></div>
           <div class="storageStat"><div class="subLabel">最終一括バックアップ</div><div class="storageValue" id="lastBackupAt">未実施</div></div>
         </div>
@@ -297,7 +298,7 @@ button{cursor:pointer}
   <nav class="toolbar">
     <div class="toolbarInner">
       <button class="btn primary" id="addExerciseBottom" type="button" onclick="window.addWorkoutExercise && window.addWorkoutExercise()">＋ 種目追加</button>
-      <button class="btn soft" id="copyPrevDay">前回の日を複製</button>
+      <button class="btn soft" id="duplicateCurrentDay">この日を複製</button>
       <button class="btn soft danger" id="clearDay">この日を消去</button>
     </div>
   </nav>
@@ -311,8 +312,10 @@ button{cursor:pointer}
 "use strict";
 
 const STORAGE_KEY = "workoutMemoApp.v1.days";
-const MAGIC_DAY = "WORKOUT_MEMO_APP_EXPORT_V6_DAY";
-const MAGIC_ALL = "WORKOUT_MEMO_APP_EXPORT_V6_ALL";
+const MAGIC_DAY = "WORKOUT_MEMO_APP_EXPORT_V7_DAY";
+const MAGIC_ALL = "WORKOUT_MEMO_APP_EXPORT_V7_ALL";
+const LEGACY_MAGIC_DAY = "WORKOUT_MEMO_APP_EXPORT_V6_DAY";
+const LEGACY_MAGIC_ALL = "WORKOUT_MEMO_APP_EXPORT_V6_ALL";
 const JSON_BEGIN = "=== DATA_JSON_BEGIN ===";
 const JSON_END = "=== DATA_JSON_END ===";
 const PHASES = [
@@ -322,10 +325,11 @@ const PHASES = [
 ];
 
 const $ = id => document.getElementById(id);
-const state = {days:{}, date:todayLocal(), importMode:null};
+const state = {days:{}, currentId:null, date:todayLocal(), importMode:null};
 const DB_NAME = "workoutJournalDB";
-const DB_VERSION = 2;
-const DAY_STORE = "days";
+const DB_VERSION = 3;
+const DAY_STORE = "entries";
+const LEGACY_DAY_STORE = "days";
 const META_STORE = "meta";
 const LAST_BACKUP_KEY = "lastBackupAt";
 const LAST_DATA_CHANGE_KEY = "lastDataChangeAt";
@@ -335,6 +339,17 @@ let dbPromise = null;
 const saveTimers = new Map();
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+function ensureDayIdentity(day){
+  if(!day||typeof day!=="object")return day;
+  if(!day.recordId)day.recordId=uid();
+  if(!day.createdAt)day.createdAt=day.updatedAt||new Date().toISOString();
+  return day;
+}
+function toRecordMap(records){
+  const out={};
+  Object.values(records||{}).forEach(raw=>{const day=ensureDayIdentity({...raw});if(day?.date)out[day.recordId]=day;});
+  return out;
+}
 function todayLocal(){
   const d=new Date();
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -375,10 +390,18 @@ function openDb(){
   if(dbPromise)return dbPromise;
   dbPromise=new Promise((resolve,reject)=>{
     const req=indexedDB.open(DB_NAME,DB_VERSION);
-    req.onupgradeneeded=()=>{
-      const db=req.result;
-      if(!db.objectStoreNames.contains(DAY_STORE)){
-        db.createObjectStore(DAY_STORE,{keyPath:"date"});
+    req.onupgradeneeded=event=>{
+      const db=req.result,tx=req.transaction;
+      const entryStore=db.objectStoreNames.contains(DAY_STORE)?tx.objectStore(DAY_STORE):db.createObjectStore(DAY_STORE,{keyPath:"recordId"});
+      if(event.oldVersion<3&&db.objectStoreNames.contains(LEGACY_DAY_STORE)){
+        const cursor=tx.objectStore(LEGACY_DAY_STORE).openCursor();
+        cursor.onsuccess=()=>{
+          const row=cursor.result;
+          if(!row)return;
+          const day=row.value;
+          if(day?.date)entryStore.put({...day,recordId:day.recordId||uid(),createdAt:day.createdAt||day.updatedAt||new Date().toISOString()});
+          row.continue();
+        };
       }
       if(!db.objectStoreNames.contains(META_STORE)){
         db.createObjectStore(META_STORE,{keyPath:"key"});
@@ -396,7 +419,7 @@ async function idbLoadAll(){
     const req=tx.objectStore(DAY_STORE).getAll();
     req.onsuccess=()=>{
       const out={};
-      (req.result||[]).forEach(day=>{if(day?.date)out[day.date]=day;});
+      (req.result||[]).forEach(day=>{if(day?.recordId&&day?.date)out[day.recordId]=day;});
       resolve(out);
     };
     req.onerror=()=>reject(req.error||new Error("IndexedDBの読み込みに失敗しました"));
@@ -422,13 +445,14 @@ async function loadAll(){
   if(legacyMigrationCompleted())return {};
   const legacy=legacyLocalStorageDays();
   if(Object.keys(legacy).length){
-    await idbReplaceAll(legacy);
+    days=toRecordMap(legacy);
+    await idbReplaceAll(days);
   }
   try{localStorage.setItem(LEGACY_MIGRATED_KEY,new Date().toISOString());}catch(_){}
-  return legacy;
+  return days;
 }
 async function idbPutDay(day){
-  if(!day?.date)return;
+  if(!day?.recordId||!day?.date)return;
   const db=await openDb();
   return new Promise((resolve,reject)=>{
     const tx=db.transaction([DAY_STORE,META_STORE],"readwrite");
@@ -439,11 +463,11 @@ async function idbPutDay(day){
     tx.onabort=()=>reject(tx.error||new Error("IndexedDBへの保存が中断されました"));
   });
 }
-async function idbDeleteDay(date){
+async function idbDeleteDay(recordId){
   const db=await openDb();
   return new Promise((resolve,reject)=>{
     const tx=db.transaction([DAY_STORE,META_STORE],"readwrite");
-    tx.objectStore(DAY_STORE).delete(date);
+    tx.objectStore(DAY_STORE).delete(recordId);
     tx.objectStore(META_STORE).put({key:LAST_DATA_CHANGE_KEY,value:new Date().toISOString()});
     tx.oncomplete=()=>resolve();
     tx.onerror=()=>reject(tx.error||new Error("IndexedDBから削除できませんでした"));
@@ -474,7 +498,7 @@ async function idbReplaceAll(days,{markChanged=false}={}){
     const tx=db.transaction(markChanged?[DAY_STORE,META_STORE]:DAY_STORE,"readwrite");
     const store=tx.objectStore(DAY_STORE);
     store.clear();
-    Object.values(days||{}).forEach(day=>{if(day?.date)store.put(day);});
+    Object.values(days||{}).forEach(day=>{if(day?.recordId&&day?.date)store.put(day);});
     if(markChanged)tx.objectStore(META_STORE).put({key:LAST_DATA_CHANGE_KEY,value:new Date().toISOString()});
     tx.oncomplete=()=>resolve();
     tx.onerror=()=>reject(tx.error||new Error("IndexedDBの一括保存に失敗しました"));
@@ -497,19 +521,19 @@ function persistAllNow({markChanged=true}={}){
     throw err;
   });
 }
-function cancelPendingSave(date){
-  const timer=saveTimers.get(date);
-  if(timer){clearTimeout(timer);saveTimers.delete(date);}
+function cancelPendingSave(recordId){
+  const timer=saveTimers.get(recordId);
+  if(timer){clearTimeout(timer);saveTimers.delete(recordId);}
 }
 function cancelAllPendingSaves(){
   for(const timer of saveTimers.values())clearTimeout(timer);
   saveTimers.clear();
 }
 async function flushPendingSaves(){
-  const dates=[...saveTimers.keys()];
-  dates.forEach(cancelPendingSave);
-  await Promise.all(dates.map(async date=>{
-    const day=state.days[date];
+  const recordIds=[...saveTimers.keys()];
+  recordIds.forEach(cancelPendingSave);
+  await Promise.all(recordIds.map(async recordId=>{
+    const day=state.days[recordId];
     if(!day)return;
     day.updatedAt=new Date().toISOString();
     await persistNow(day);
@@ -518,12 +542,20 @@ async function flushPendingSaves(){
 function blankSet(){ return {id:uid(),weight:"",reps:"",time:"",rpe:"",rest:"",note:""}; }
 function blankBody(){ return {id:uid(),part:"",exercises:"",sets:""}; }
 function blankExercise(name=""){ return {id:uid(),name,mainTarget:"",subTarget:"",caution:false,tips:"",blocks:{warmup:[blankSet()],main:[blankSet()],supplement:[blankSet()]}}; }
-function blankDay(date){ return {version:6,date,meta:{target:"",basicPolicy:"",trainingStart:"",trainingEnd:"",theme:""},pre:{sleep:{start:"",end:""},nap:{start:"",end:""},meal:{time:"",note:""}},bodyTotals:{main:[blankBody()],sub:[blankBody()]},daySummary:"",exercises:[],updatedAt:new Date().toISOString()}; }
+function blankDay(date){ const now=new Date().toISOString();return {version:7,recordId:uid(),date,createdAt:now,meta:{target:"",basicPolicy:"",trainingStart:"",trainingEnd:"",theme:""},pre:{sleep:{start:"",end:""},nap:{start:"",end:""},meal:{time:"",note:""}},bodyTotals:{main:[blankBody()],sub:[blankBody()]},daySummary:"",exercises:[],updatedAt:now}; }
+function duplicateDayRecord(source){
+  const copy=JSON.parse(JSON.stringify(source)),now=new Date().toISOString();
+  copy.version=7;copy.recordId=uid();copy.createdAt=now;copy.updatedAt=now;
+  [copy.bodyTotals?.main||[],copy.bodyTotals?.sub||[]].flat().forEach(row=>row.id=uid());
+  (copy.exercises||[]).forEach(ex=>{ex.id=uid();PHASES.forEach(([phase])=>(ex.blocks?.[phase]||[]).forEach(set=>set.id=uid()));});
+  return copy;
+}
 function normalizeBody(r){ return {id:r?.id||uid(),part:String(r?.part||""),exercises:r?.exercises??"",sets:r?.sets??""}; }
 function migrateAll(){
-  Object.keys(state.days).forEach(date=>{
-    const raw=state.days[date]||{},oldTitle=String(raw.title||"");
-    const day={version:6,date:raw.date||date,
+  const migrated={};
+  Object.entries(state.days).forEach(([key,value])=>{
+    const raw=ensureDayIdentity(value||{}),oldTitle=String(raw.title||"");
+    const day={version:7,recordId:raw.recordId,date:raw.date||key,createdAt:raw.createdAt,
       meta:{target:String(raw.meta?.target||""),basicPolicy:String(raw.meta?.basicPolicy||""),trainingStart:String(raw.meta?.trainingStart||""),trainingEnd:String(raw.meta?.trainingEnd||""),theme:String(raw.meta?.theme||oldTitle)},
       pre:{sleep:{start:String(raw.pre?.sleep?.start||""),end:String(raw.pre?.sleep?.end||"")},nap:{start:String(raw.pre?.nap?.start||""),end:String(raw.pre?.nap?.end||"")},meal:{time:String(raw.pre?.meal?.time||""),note:String(raw.pre?.meal?.note||"")}},
       bodyTotals:{main:(Array.isArray(raw.bodyTotals?.main)&&raw.bodyTotals.main.length?raw.bodyTotals.main:[blankBody()]).map(normalizeBody),sub:(Array.isArray(raw.bodyTotals?.sub)&&raw.bodyTotals.sub.length?raw.bodyTotals.sub:[blankBody()]).map(normalizeBody)},
@@ -533,23 +565,31 @@ function migrateAll(){
       if(ex.blocks) PHASES.forEach(([key])=>out.blocks[key]=(Array.isArray(ex.blocks[key])?ex.blocks[key]:[]).map(normalizeSet));
       else out.blocks.main=(Array.isArray(ex.sets)?ex.sets:[]).map(normalizeSet);
       PHASES.forEach(([key])=>{if(!out.blocks[key].length)out.blocks[key]=[blankSet()]});return out;
-    });state.days[date]=day;
+    });migrated[day.recordId]=day;
   });
+  state.days=migrated;
 }
 function normalizeSet(s){ return {id:s?.id||uid(),weight:s?.weight??"",reps:s?.reps??"",time:String(s?.time||""),rpe:s?.rpe??"",rest:s?.rest??"",note:String(s?.note||"")}; }
-function currentDay(){ if(!state.days[state.date])state.days[state.date]=blankDay(state.date);return state.days[state.date]; }
+function recordsForDate(date){return Object.values(state.days).filter(day=>day?.date===date).sort((a,b)=>String(b.updatedAt||b.createdAt||"").localeCompare(String(a.updatedAt||a.createdAt||"")));}
+function currentDay(){
+  if(state.currentId&&state.days[state.currentId])return state.days[state.currentId];
+  const existing=recordsForDate(state.date)[0];
+  if(existing){state.currentId=existing.recordId;return existing;}
+  const day=blankDay(state.date);state.days[day.recordId]=day;state.currentId=day.recordId;return day;
+}
+function openDate(date){state.date=date;state.currentId=recordsForDate(date)[0]?.recordId||null;renderDay();}
 function hasMeaningfulDayData(day){
   if(!day)return false;
   const values=[day.meta?.target,day.meta?.basicPolicy,day.meta?.trainingStart,day.meta?.trainingEnd,day.meta?.theme,day.pre?.sleep?.start,day.pre?.sleep?.end,day.pre?.nap?.start,day.pre?.nap?.end,day.pre?.meal?.time,day.pre?.meal?.note,day.daySummary];
   return values.some(v=>String(v??"").trim()!=="")||(Array.isArray(day.exercises)&&day.exercises.length>0);
 }
 function recordedDays(){return Object.values(state.days).filter(hasMeaningfulDayData);}
-function recordedDaysObject(){return Object.fromEntries(recordedDays().map(day=>[day.date,day]));}
+function recordedDaysObject(){return Object.fromEntries(recordedDays().map(day=>[day.recordId,day]));}
 
 function save(){
   const day=currentDay();
   $("saveStatus").textContent="保存中…";
-  cancelPendingSave(day.date);
+  cancelPendingSave(day.recordId);
   const timer=setTimeout(async()=>{
     day.updatedAt=new Date().toISOString();
     try{
@@ -559,10 +599,10 @@ function save(){
     }catch(_){
       // persistNow already reports the error to the user.
     }finally{
-      saveTimers.delete(day.date);
+      saveTimers.delete(day.recordId);
     }
   },120);
-  saveTimers.set(day.date,timer);
+  saveTimers.set(day.recordId,timer);
 }
 function showToast(msg){
   const el=$("toast");el.textContent=msg;el.classList.add("show");setTimeout(()=>el.classList.remove("show"),1800);
@@ -581,16 +621,17 @@ function allExerciseNames(){
   Object.values(state.days).forEach(d=>(d.exercises||[]).forEach(ex=>{const k=normalizeName(ex.name);if(k&&!m.has(k))m.set(k,ex.name.trim())}));
   return [...m.values()].sort((a,b)=>a.localeCompare(b,"ja"));
 }
-function sessionsFor(name,beforeDate=null){
+function sessionsFor(name,beforeCurrent=false){
   const key=normalizeName(name);if(!key)return[];
+  const current=currentDay();
   return Object.values(state.days)
-    .filter(d=>!beforeDate||d.date<beforeDate)
-    .flatMap(d=>(d.exercises||[]).filter(ex=>normalizeName(ex.name)===key).map(ex=>({date:d.date,title:composedTitle(d),ex})))
-    .sort((a,b)=>b.date.localeCompare(a.date));
+    .filter(d=>!beforeCurrent||d.date<current.date||(d.date===current.date&&d.recordId!==current.recordId&&String(d.createdAt||"")<String(current.createdAt||"")))
+    .flatMap(d=>(d.exercises||[]).filter(ex=>normalizeName(ex.name)===key).map(ex=>({date:d.date,createdAt:d.createdAt,title:composedTitle(d),ex})))
+    .sort((a,b)=>b.date.localeCompare(a.date)||String(b.createdAt||"").localeCompare(String(a.createdAt||"")));
 }
-function previousSession(name){ return sessionsFor(name,state.date)[0]||null; }
+function previousSession(name){ return sessionsFor(name,true)[0]||null; }
 function previousTips(name){
-  return sessionsFor(name,state.date).find(x=>String(x.ex.tips||"").trim())||null;
+  return sessionsFor(name,true).find(x=>String(x.ex.tips||"").trim())||null;
 }
 function previousPhase(name,phase){
   const s=previousSession(name);if(!s)return null;
@@ -600,7 +641,7 @@ function allSetsForExercise(name,excludeCurrent=false){
   const key=normalizeName(name),out=[];
   if(!key)return out;
   Object.values(state.days).forEach(d=>{
-    if(excludeCurrent&&d.date===state.date)return;
+    if(excludeCurrent&&d.recordId===state.currentId)return;
     (d.exercises||[]).forEach(ex=>{
       if(normalizeName(ex.name)!==key)return;
       (ex.blocks?.main||[]).forEach(s=>out.push({day:d,phase:"main",set:s}));
@@ -629,7 +670,7 @@ function isNewPR(name,weight,reps){
   });
   return !map.has(w)||r>map.get(w);
 }
-function countExerciseSessions(name){ return sessionsFor(name).length + ((currentDay().exercises||[]).some(ex=>normalizeName(ex.name)===normalizeName(name))?1:0); }
+function countExerciseSessions(name){ return sessionsFor(name).length; }
 function firstMainWeight(ex){const s=ex.blocks?.main?.[0];const w=Number(s?.weight);return s&&s.weight!==""&&Number.isFinite(w)&&w>0?w:null;}
 function weightPercent(ex,set,phase){if(phase==="main")return "";const base=firstMainWeight(ex),w=Number(set.weight);if(base==null||set.weight===""||!Number.isFinite(w))return "—";const pct=w/base*100;const rounded=Math.round(pct*10)/10;return `${Number.isInteger(rounded)?rounded.toFixed(0):rounded.toFixed(1)}%`; }
 function formatSet(s,i){
@@ -646,15 +687,20 @@ function searchText(day){
 function refreshDatalist(){
   $("exerciseNames").innerHTML=allExerciseNames().map(n=>`<option value="${esc(n)}"></option>`).join("");
 }
+function recordOrdinal(day){
+  const same=Object.values(state.days).filter(d=>d?.date===day.date&&(hasMeaningfulDayData(d)||d.recordId===day.recordId)).sort((a,b)=>String(a.createdAt||"").localeCompare(String(b.createdAt||""))||a.recordId.localeCompare(b.recordId));
+  return same.length>1?`${same.findIndex(d=>d.recordId===day.recordId)+1}/${same.length}`:"";
+}
+function recordDateLabel(day){const ordinal=recordOrdinal(day);return `${day.date}${ordinal?` ・ 同日${ordinal}`:""}`;}
 
 function renderSidebar(){
   const q=$("globalSearch").value.trim().toLocaleLowerCase("ja-JP");
-  const all=recordedDays().sort((a,b)=>b.date.localeCompare(a.date));
+  const all=recordedDays().sort((a,b)=>b.date.localeCompare(a.date)||String(b.createdAt||"").localeCompare(String(a.createdAt||"")));
   const filtered=q?all.filter(d=>searchText(d).includes(q)):all;
-  $("searchMeta").textContent=q?`${filtered.length}件 / 全${all.length}日`:`全${all.length}日`;
+  $("searchMeta").textContent=q?`${filtered.length}件 / 全${all.length}件`:`全${all.length}件`;
   $("dayList").innerHTML=filtered.length?filtered.map(d=>`
-    <button class="dayItem ${d.date===state.date?"active":""}" data-date="${d.date}">
-      <div class="dayDate">${d.date}</div>
+    <button class="dayItem ${d.recordId===state.currentId?"active":""}" data-record-id="${esc(d.recordId)}">
+      <div class="dayDate">${d.date}${recordOrdinal(d)?`<span class="dayCount">同日${recordOrdinal(d)}</span>`:""}</div>
       <div class="dayTitleSide">${esc(composedTitle(d)||"（入力なし）")}</div>
     </button>`).join(""):`<div class="empty">該当する日付がありません。</div>`;
 }
@@ -810,7 +856,7 @@ function renderExercises(){
 function renderDay(){
   const d=currentDay();$("dateInput").value=state.date;$("dayTarget").value=d.meta.target;$("basicPolicy").value=d.meta.basicPolicy;$("dayTheme").value=d.meta.theme;$("daySummary").value=d.daySummary;$("mealNote").value=d.pre.meal.note;
   [["trainingStart",d.meta.trainingStart],["trainingEnd",d.meta.trainingEnd],["sleepStart",d.pre.sleep.start],["sleepEnd",d.pre.sleep.end],["napStart",d.pre.nap.start],["napEnd",d.pre.nap.end],["mealTime",d.pre.meal.time]].forEach(([id,v])=>$(id).value=v||"");
-  $("currentHeading").textContent=`${state.date}${composedTitle(d)?` ・ ${composedTitle(d)}`:""}`;renderTimeCalcs();renderBodyTotals();renderExercises();renderSidebar();
+  $("currentHeading").textContent=`${recordDateLabel(d)}${composedTitle(d)?` ・ ${composedTitle(d)}`:""}`;renderTimeCalcs();renderBodyTotals();renderExercises();renderSidebar();
 }
 
 function findExercise(id){ return currentDay().exercises.find(x=>x.id===id); }
@@ -835,7 +881,7 @@ document.addEventListener("click",e=>{
   if(typeof b.onclick!=="function")addExercise();
 },true);
 
-["dayTarget","basicPolicy","dayTheme"].forEach(id=>$(id).addEventListener("input",e=>{const d=currentDay();if(id==="dayTarget")d.meta.target=e.target.value;if(id==="basicPolicy")d.meta.basicPolicy=e.target.value;if(id==="dayTheme")d.meta.theme=e.target.value;$("currentHeading").textContent=`${state.date}${composedTitle(d)?` ・ ${composedTitle(d)}`:""}`;save();}));
+["dayTarget","basicPolicy","dayTheme"].forEach(id=>$(id).addEventListener("input",e=>{const d=currentDay();if(id==="dayTarget")d.meta.target=e.target.value;if(id==="basicPolicy")d.meta.basicPolicy=e.target.value;if(id==="dayTheme")d.meta.theme=e.target.value;$("currentHeading").textContent=`${recordDateLabel(d)}${composedTitle(d)?` ・ ${composedTitle(d)}`:""}`;save();}));
 function storeDayTime(id,value){
   const d=currentDay();
   if(id==="trainingStart")d.meta.trainingStart=value;else if(id==="trainingEnd")d.meta.trainingEnd=value;else if(id==="sleepStart")d.pre.sleep.start=value;else if(id==="sleepEnd")d.pre.sleep.end=value;else if(id==="napStart")d.pre.nap.start=value;else if(id==="napEnd")d.pre.nap.end=value;else d.pre.meal.time=value;
@@ -847,9 +893,9 @@ function storeDayTime(id,value){
 });
 $("mealNote").addEventListener("input",e=>{currentDay().pre.meal.note=e.target.value;save();});
 $("daySummary").addEventListener("input",e=>{currentDay().daySummary=e.target.value;save();});
-$("dateInput").addEventListener("change",e=>{if(e.target.value){state.date=e.target.value;renderDay();}});
-$("prevDay").addEventListener("click",()=>{state.date=shiftDate(state.date,-1);renderDay();});
-$("nextDay").addEventListener("click",()=>{state.date=shiftDate(state.date,1);renderDay();});
+$("dateInput").addEventListener("change",e=>{if(e.target.value)openDate(e.target.value);});
+$("prevDay").addEventListener("click",()=>openDate(shiftDate(state.date,-1)));
+$("nextDay").addEventListener("click",()=>openDate(shiftDate(state.date,1)));
 
 $("exerciseList").addEventListener("input",e=>{
   const a=e.target.dataset.action,exid=e.target.dataset.exid,phase=e.target.dataset.phase,setid=e.target.dataset.setid;
@@ -909,25 +955,25 @@ $("exerciseList").addEventListener("click",e=>{
   save();renderExercises();renderBodyTotals();
 });
 
-$("copyPrevDay").addEventListener("click",()=>{
-  const dates=Object.keys(state.days).filter(d=>d<state.date&&state.days[d]?.exercises?.length).sort().reverse();
-  if(!dates.length){showToast("複製できる過去記録がありません");return;}
-  if(currentDay().exercises.length&&!confirm("現在の種目を置き換えて、前回日の種目構成を複製しますか？"))return;
-  const prev=state.days[dates[0]];
-  currentDay().exercises=prev.exercises.map(ex=>({
-    id:uid(),name:ex.name,mainTarget:ex.mainTarget||"",subTarget:ex.subTarget||"",caution:Boolean(ex.caution),tips:ex.tips||"",
-    blocks:Object.fromEntries(PHASES.map(([p])=>[p,(ex.blocks[p]||[]).map(s=>({id:uid(),weight:s.weight??"",reps:s.reps??"",time:"",rpe:"",rest:s.rest??"",note:""}))]))
-  }));
-  save();renderDay();showToast(`${dates[0]} の構成を複製しました`);
+$("duplicateCurrentDay").addEventListener("click",async()=>{
+  const source=currentDay();
+  if(!hasMeaningfulDayData(source)){showToast("複製する内容がまだありません");return;}
+  let copy=null;
+  try{
+    await flushPendingSaves();
+    copy=duplicateDayRecord(source);state.days[copy.recordId]=copy;state.currentId=copy.recordId;state.date=copy.date;
+    await idbPutDay(copy);renderDay();showToast(`${copy.date} の記録を複製しました`);await refreshStorageInfo();
+  }catch(err){if(copy)delete state.days[copy.recordId];state.currentId=source.recordId;state.date=source.date;renderDay();console.error(err);alert("複製に失敗しました。");}
 });
 $("clearDay").addEventListener("click",async()=>{
-  if(!confirm(`${state.date} の記録をすべて削除しますか？`))return;
-  const date=state.date;
-  cancelPendingSave(date);
+  const day=currentDay();
+  if(!confirm(`${recordDateLabel(day)} の記録をすべて削除しますか？`))return;
+  const date=day.date,recordId=day.recordId;
+  cancelPendingSave(recordId);
   try{
-    await idbDeleteDay(date);
-    delete state.days[date];
-    renderDay();
+    await idbDeleteDay(recordId);
+    delete state.days[recordId];state.currentId=null;
+    openDate(date);
     showToast("削除しました");await refreshStorageInfo();
   }catch(err){
     console.error(err);
@@ -937,8 +983,8 @@ $("clearDay").addEventListener("click",async()=>{
 
 $("globalSearch").addEventListener("input",renderSidebar);
 $("dayList").addEventListener("click",e=>{
-  const b=e.target.closest("[data-date]");if(!b)return;
-  state.date=b.dataset.date;renderDay();closeSidebar();
+  const b=e.target.closest("[data-record-id]");if(!b||!state.days[b.dataset.recordId])return;
+  state.currentId=b.dataset.recordId;state.date=state.days[state.currentId].date;renderDay();closeSidebar();
 });
 function openSidebar(){$("sidebar").classList.add("open");$("overlay").classList.add("show");}
 function closeSidebar(){$("sidebar").classList.remove("open");$("overlay").classList.remove("show");}
@@ -949,33 +995,44 @@ function dayHumanText(day){
   const lines=[MAGIC_DAY,`日付: ${day.date}`,`ターゲット: ${day.meta.target}`,`基本方針: ${day.meta.basicPolicy}`,`トレーニング時間帯: ${day.meta.trainingStart||"—"}-${day.meta.trainingEnd||"—"}`,`テーマ: ${day.meta.theme}`,"","■ 事前情報",`睡眠: ${day.pre.sleep.start||"—"}-${day.pre.sleep.end||"—"} / ${fmtDur(diffForward(day.pre.sleep.start,day.pre.sleep.end))} / トレ開始の${fmtDur(diffBack(day.pre.sleep.end,day.meta.trainingStart))}前`,`昼寝: ${day.pre.nap.start||"—"}-${day.pre.nap.end||"—"} / ${fmtDur(diffForward(day.pre.nap.start,day.pre.nap.end))} / トレ開始の${fmtDur(diffBack(day.pre.nap.end,day.meta.trainingStart))}前`,`食事: ${day.pre.meal.time||"—"} / ${day.pre.meal.note} / トレ開始の${fmtDur(diffBack(day.pre.meal.time,day.meta.trainingStart))}前`,`総トレーニング時間: ${fmtDur(diffForward(day.meta.trainingStart,day.meta.trainingEnd))}`,"","■ 部位別合計","[メイン部位]"];
   autoBodyTotalsForDay(day,"main").forEach(r=>lines.push(`${r.part}: ${r.exercises}種目 / ${r.sets}セット`));lines.push("[サブ部位]");autoBodyTotalsForDay(day,"sub").forEach(r=>lines.push(`${r.part}: ${r.exercises}種目 / ${r.sets}セット`));lines.push("","■ 1日の総括メモ",day.daySummary||"","");
   day.exercises.forEach((ex,i)=>{lines.push(`■ 種目: ${ex.name||`種目${i+1}`}`,`メイン部位: ${ex.mainTarget||"—"}`,`サブ部位: ${ex.subTarget||"—"}`,`注意: ${ex.caution?"あり":"なし"}`,"[種目のコツ]",ex.tips||"");PHASES.forEach(([p,l])=>{lines.push("",`[${l}]`);(ex.blocks[p]||[]).forEach((set,j)=>{lines.push(`${j+1}セット目: ${set.weight===""?"—":set.weight+"kg"} × ${set.reps===""?"—":set.reps+"回"} / 時刻 ${set.time||"—"}${p==="main"&&set.rpe!==""?` / RPE ${set.rpe}`:""} / レスト ${set.rest===""?"—":set.rest+"分"}`);if(set.note)lines.push(`  メモ: ${set.note.replace(/\n/g,"\n  ")}`);});});lines.push("");});
-  lines.push(JSON_BEGIN,JSON.stringify({version:6,day},null,2),JSON_END);return lines.join("\n");
+  lines.push(JSON_BEGIN,JSON.stringify({version:7,day},null,2),JSON_END);return lines.join("\n");
 }
-function allHumanText(){const days=recordedDays().sort((a,b)=>a.date.localeCompare(b.date)),exportDays=Object.fromEntries(days.map(day=>[day.date,day])),lines=[MAGIC_ALL,`出力日: ${todayLocal()}`,`記録日数: ${days.length}`,""];days.forEach(day=>{lines.push("==================================================",`${day.date} ${composedTitle(day)}`,"==================================================","",dayHumanText(day).split(JSON_BEGIN)[0].replace(MAGIC_DAY+"\n","").trim(),"")});lines.push(JSON_BEGIN,JSON.stringify({version:6,days:exportDays},null,2),JSON_END);return lines.join("\n");}
+function allHumanText(){const days=recordedDays().sort((a,b)=>a.date.localeCompare(b.date)||String(a.createdAt||"").localeCompare(String(b.createdAt||""))),exportEntries=Object.fromEntries(days.map(day=>[day.recordId,day])),lines=[MAGIC_ALL,`出力日: ${todayLocal()}`,`記録件数: ${days.length}`,""];days.forEach(day=>{lines.push("==================================================",`${recordDateLabel(day)} ${composedTitle(day)}`,"==================================================","",dayHumanText(day).split(JSON_BEGIN)[0].replace(MAGIC_DAY+"\n","").trim(),"")});lines.push(JSON_BEGIN,JSON.stringify({version:7,entries:exportEntries},null,2),JSON_END);return lines.join("\n");}
 function isPlainObject(value){return Boolean(value)&&typeof value==="object"&&!Array.isArray(value);}
 function isValidDateKey(value){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(value))return false;
   const [y,m,d]=value.split("-").map(Number),date=new Date(Date.UTC(y,m-1,d));
   return date.getUTCFullYear()===y&&date.getUTCMonth()===m-1&&date.getUTCDate()===d;
 }
-function validateDayRecord(raw,date){
-  if(!isPlainObject(raw)||raw.date!==date||!isValidDateKey(date))throw new Error(`${date} の日付またはレコード形式が不正です`);
-  if(Number(raw.version||6)>6)throw new Error(`${date} は未対応のVersionです`);
+function validateDayRecord(raw,expectedDate=null){
+  const date=raw?.date;
+  if(!isPlainObject(raw)||!isValidDateKey(date)||(expectedDate&&date!==expectedDate))throw new Error(`${date||expectedDate||"不明"} の日付またはレコード形式が不正です`);
+  if(Number(raw.version||6)>7)throw new Error(`${date} は未対応のVersionです`);
+  if(raw.recordId!=null&&typeof raw.recordId!=="string")throw new Error(`${date} の記録IDが不正です`);
   if(raw.exercises!=null&&!Array.isArray(raw.exercises))throw new Error(`${date} の種目データが不正です`);
 }
 function parseImportPayload(text,mode){
   const firstLine=text.replace(/^\uFEFF/,"").split(/\r?\n/,1)[0].trim();
-  const expected=mode==="all"?MAGIC_ALL:MAGIC_DAY;
-  if(firstLine!==expected)throw new Error("選択した取込種別とTXTの識別子が一致しません");
+  const expected=mode==="all"?[MAGIC_ALL,LEGACY_MAGIC_ALL]:[MAGIC_DAY,LEGACY_MAGIC_DAY];
+  if(!expected.includes(firstLine))throw new Error("選択した取込種別とTXTの識別子が一致しません");
   const start=text.indexOf(JSON_BEGIN),end=text.indexOf(JSON_END,start+JSON_BEGIN.length);
   if(start<0||end<=start)throw new Error("復元用データが見つかりません");
   const payload=JSON.parse(text.slice(start+JSON_BEGIN.length,end).trim());
-  if(!isPlainObject(payload)||Number(payload.version)!==6)throw new Error("Version 6形式ではありません");
+  const version=Number(payload?.version);
+  if(!isPlainObject(payload)||![6,7].includes(version))throw new Error("対応していないバックアップ形式です");
   if(mode==="all"){
-    if(!isPlainObject(payload.days))throw new Error("一括バックアップ形式ではありません");
-    Object.keys(payload.days).forEach(date=>validateDayRecord(payload.days[date],date));
+    const source=version===6?payload.days:payload.entries;
+    if(!isPlainObject(source))throw new Error("一括バックアップ形式ではありません");
+    const normalized={};
+    Object.entries(source).forEach(([key,value])=>{
+      validateDayRecord(value,version===6?key:null);
+      const day=ensureDayIdentity({...value});
+      if(version===7&&value.recordId&&value.recordId!==key)throw new Error(`${day.date} の記録IDが一致しません`);
+      normalized[day.recordId]=day;
+    });
+    payload.normalizedEntries=normalized;
   }else{
-    validateDayRecord(payload.day,payload.day?.date);
+    validateDayRecord(payload.day);
   }
   return payload;
 }
@@ -1009,22 +1066,22 @@ $("importFile").addEventListener("change",async e=>{
     const text=await file.text(),payload=parseImportPayload(text,state.importMode);
     if(state.importMode==="all"){
       cancelAllPendingSaves();
-      const incoming=payload.days;
+      const incoming=payload.normalizedEntries;
       const previousDays={...state.days};
 
-      const dates=Object.keys(incoming).sort();
+      const recordIds=Object.keys(incoming);
       let added=0, overwritten=0, skipped=0;
 
-      for(const date of dates){
-        const exists=hasMeaningfulDayData(state.days[date]);
+      for(const recordId of recordIds){
+        const incomingDay=incoming[recordId],exists=hasMeaningfulDayData(state.days[recordId]);
         if(!exists){
-          state.days[date]=incoming[date];
+          state.days[recordId]=incomingDay;
           added++;
           continue;
         }
 
         const overwrite=confirm(
-          `${date} はこのスマホにも記録があります。
+          `${recordDateLabel(state.days[recordId])} はこのスマホにも同じ記録IDがあります。
 
 ` +
           `「OK」＝インポート側のデータで上書き
@@ -1033,7 +1090,7 @@ $("importFile").addEventListener("change",async e=>{
         );
 
         if(overwrite){
-          state.days[date]=incoming[date];
+          state.days[recordId]=incomingDay;
           overwritten++;
         }else{
           skipped++;
@@ -1042,19 +1099,16 @@ $("importFile").addEventListener("change",async e=>{
 
       migrateAll();
       try{await persistAllNow();}catch(err){state.days=previousDays;throw err;}
-      const importedDates=dates.filter(d=>state.days[d]);
-      if(importedDates.length) state.date=importedDates.sort().reverse()[0];
+      const imported=recordIds.map(id=>state.days[id]).filter(Boolean).sort((a,b)=>b.date.localeCompare(a.date)||String(b.createdAt||"").localeCompare(String(a.createdAt||"")));
+      if(imported.length){state.currentId=imported[0].recordId;state.date=imported[0].date;}
 
       renderDay();
-      showToast(`追加 ${added}日 / 上書き ${overwritten}日 / 保持 ${skipped}日`);await refreshStorageInfo();
+      showToast(`追加 ${added}件 / 上書き ${overwritten}件 / 保持 ${skipped}件`);await refreshStorageInfo();
     }else{
-      const raw=payload.day;
-      if(hasMeaningfulDayData(state.days[raw.date])&&!confirm(`${raw.date} の既存記録をインポート内容で上書きしますか？`))return;
-      cancelPendingSave(raw.date);
-      const hadPrevious=Object.prototype.hasOwnProperty.call(state.days,raw.date),previous=state.days[raw.date];
-      const tmp={};tmp[raw.date]=raw;state.days={...state.days,...tmp};migrateAll();
-      try{await idbPutDay(state.days[raw.date]);}catch(err){if(hadPrevious)state.days[raw.date]=previous;else delete state.days[raw.date];throw err;}
-      state.date=raw.date;renderDay();showToast(`${raw.date} をインポートしました`);await refreshStorageInfo();
+      const imported=duplicateDayRecord(payload.day);
+      state.days[imported.recordId]=imported;migrateAll();
+      try{await idbPutDay(state.days[imported.recordId]);}catch(err){delete state.days[imported.recordId];throw err;}
+      state.currentId=imported.recordId;state.date=imported.date;renderDay();showToast(`${imported.date} に新しい記録としてインポートしました`);await refreshStorageInfo();
     }
   }catch(err){alert(`インポートできませんでした。\n${err.message}`);}
 });
@@ -1099,7 +1153,7 @@ async function ensurePersistentStorage(){
 }
 async function refreshStorageInfo(){
   if($("recordDataSize"))$("recordDataSize").textContent=formatBytes(recordDataApproxBytes());
-  if($("storageDays"))$("storageDays").textContent=`${recordedDays().length}日`;
+  if($("storageDays"))$("storageDays").textContent=`${recordedDays().length}件`;
   try{
     const est=await navigator.storage?.estimate?.();
     if($("storageUsage"))$("storageUsage").textContent=formatBytes(est?.usage??NaN);
@@ -1156,6 +1210,7 @@ async function deleteAllWorkoutData(){
   try{
     await idbReplaceAll({},{markChanged:true});
     state.days={};
+    state.currentId=null;
     state.date=todayLocal();
     renderDay();
     await refreshStorageInfo();

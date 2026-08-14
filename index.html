@@ -231,7 +231,7 @@ button{cursor:pointer}
         <div class="metaGrid">
           <div><div class="subLabel">ターゲット</div><input class="input" id="dayTarget" placeholder="例：胸・肩サイド・二頭"></div>
           <div><div class="subLabel">基本方針</div><input class="input" id="basicPolicy" placeholder="例：回数重視、4割25repレスト2分基準"></div>
-          <div><div class="subLabel">トレーニング時間帯（時計選択・5分単位）</div><div class="timeRange"><input class="input clockInput" id="trainingStart" type="time" step="300"><span>〜</span><input class="input clockInput" id="trainingEnd" type="time" step="300"></div></div>
+          <div><div class="subLabel">トレーニング時間帯（数字4桁・5分単位）</div><div class="timeRange"><input class="input clockInput" id="trainingStart" type="text" inputmode="numeric" maxlength="5" placeholder="例 1030"><span>〜</span><input class="input clockInput" id="trainingEnd" type="text" inputmode="numeric" maxlength="5" placeholder="例 1200"></div></div>
           <div><div class="subLabel">テーマ</div><input class="input" id="dayTheme" placeholder="例：短くする"></div>
         </div>
       </section>
@@ -239,17 +239,17 @@ button{cursor:pointer}
       <section class="card">
         <p class="sectionLabel">事前情報</p>
         <div class="infoBlock"><div class="infoHead">睡眠</div><div class="infoGrid3">
-          <div><div class="subLabel">開始</div><input class="input clockInput" id="sleepStart" type="time" step="300"></div>
-          <div><div class="subLabel">終了</div><input class="input clockInput" id="sleepEnd" type="time" step="300"></div>
+          <div><div class="subLabel">開始</div><input class="input clockInput" id="sleepStart" type="text" inputmode="numeric" maxlength="5" placeholder="例 2330"></div>
+          <div><div class="subLabel">終了</div><input class="input clockInput" id="sleepEnd" type="text" inputmode="numeric" maxlength="5" placeholder="例 0700"></div>
           <div><div class="subLabel">トレーニング開始との関係</div><div class="calcText" id="sleepCalc"></div></div>
         </div></div>
         <div class="infoBlock"><div class="infoHead">昼寝</div><div class="infoGrid3">
-          <div><div class="subLabel">開始</div><input class="input clockInput" id="napStart" type="time" step="300"></div>
-          <div><div class="subLabel">終了</div><input class="input clockInput" id="napEnd" type="time" step="300"></div>
+          <div><div class="subLabel">開始</div><input class="input clockInput" id="napStart" type="text" inputmode="numeric" maxlength="5" placeholder="例 1330"></div>
+          <div><div class="subLabel">終了</div><input class="input clockInput" id="napEnd" type="text" inputmode="numeric" maxlength="5" placeholder="例 1400"></div>
           <div><div class="subLabel">トレーニング開始との関係</div><div class="calcText" id="napCalc"></div></div>
         </div></div>
         <div class="infoBlock"><div class="infoHead">食事</div><div class="infoGrid3">
-          <div><div class="subLabel">時刻</div><input class="input clockInput" id="mealTime" type="time" step="300"></div>
+          <div><div class="subLabel">時刻</div><input class="input clockInput" id="mealTime" type="text" inputmode="numeric" maxlength="5" placeholder="例 1830"></div>
           <div><div class="subLabel">内容メモ</div><textarea class="textarea" id="mealNote" placeholder="食事内容"></textarea></div>
           <div><div class="subLabel">トレーニング開始との関係</div><div class="calcText" id="mealCalc"></div></div>
         </div></div>
@@ -343,7 +343,33 @@ function shiftDate(s,n){
   const [y,m,d]=s.split("-").map(Number),x=new Date(y,m-1,d);x.setDate(x.getDate()+n);
   return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`;
 }
-function nowTime(){ const d=new Date(); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; }
+function normalizedTimeCharacters(value){ return String(value??"").trim().replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)).replace(/：/g,":"); }
+function isCompleteTimeInput(value){ return /^(?:\d{4}|\d{1,2}:\d{2})$/.test(normalizedTimeCharacters(value)); }
+function normalizeTimeInput(value){
+  const raw=normalizedTimeCharacters(value);
+  if(!raw)return "";
+  let hour,minute;
+  const colon=raw.match(/^(\d{1,2}):(\d{2})$/),digits=raw.match(/^(\d{3,4})$/);
+  if(colon){hour=Number(colon[1]);minute=Number(colon[2]);}
+  else if(digits){hour=Number(raw.slice(0,-2));minute=Number(raw.slice(-2));}
+  else return null;
+  if(hour>23||minute>59)return null;
+  const rounded=(Math.round((hour*60+minute)/5)*5)%(24*60);
+  return `${String(Math.floor(rounded/60)).padStart(2,"0")}:${String(rounded%60).padStart(2,"0")}`;
+}
+function nowTime(){ const d=new Date(); return normalizeTimeInput(`${d.getHours()}:${String(d.getMinutes()).padStart(2,"0")}`); }
+function validateTimeInput(input){
+  const normalized=normalizeTimeInput(input.value);
+  if(normalized===null){
+    input.setCustomValidity("時刻は1030または10:30の形式で入力してください（00:00〜23:59）");
+    input.reportValidity();
+    showToast("時刻を数字4桁で入力してください（例：1030）");
+    return null;
+  }
+  input.setCustomValidity("");
+  input.value=normalized;
+  return normalized;
+}
 function normalizeName(s){ return String(s||"").trim().replace(/\s+/g," ").toLocaleLowerCase("ja-JP"); }
 function esc(s){ return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c])); }
 function openDb(){
@@ -712,7 +738,7 @@ function renderPhase(ex,phase,label){
           </div>
           <div class="field timeWrap">
             <span class="fieldLabel">時刻${phase==="main"?" / RPE":""}</span>
-            <input class="input timeInput" type="time" step="300" data-action="set-time" data-exid="${ex.id}" data-phase="${phase}" data-setid="${s.id}" value="${esc(s.time)}">
+            <input class="input timeInput" type="text" inputmode="numeric" maxlength="5" placeholder="例 1030" data-action="set-time" data-exid="${ex.id}" data-phase="${phase}" data-setid="${s.id}" value="${esc(s.time)}">
             ${phase==="main"?`<input class="input" style="margin-top:6px" type="number" inputmode="decimal" step="0.5" min="1" max="10" data-action="set-rpe" data-exid="${ex.id}" data-phase="${phase}" data-setid="${s.id}" value="${esc(s.rpe)}" placeholder="RPE">`:""}
           </div>
           <div class="field restWrap">
@@ -811,7 +837,15 @@ document.addEventListener("click",e=>{
 },true);
 
 ["dayTarget","basicPolicy","dayTheme"].forEach(id=>$(id).addEventListener("input",e=>{const d=currentDay();if(id==="dayTarget")d.meta.target=e.target.value;if(id==="basicPolicy")d.meta.basicPolicy=e.target.value;if(id==="dayTheme")d.meta.theme=e.target.value;$("currentHeading").textContent=`${state.date}${composedTitle(d)?` ・ ${composedTitle(d)}`:""}`;save();}));
-["trainingStart","trainingEnd","sleepStart","sleepEnd","napStart","napEnd","mealTime"].forEach(id=>$(id).addEventListener("change",e=>{if(e.target.value){const [hh,mm]=e.target.value.split(":").map(Number);const rounded=(Math.round(mm/5)*5)%60;const carry=mm>=58&&rounded===0?1:0;e.target.value=`${String((hh+carry)%24).padStart(2,"0")}:${String(rounded).padStart(2,"0")}`;} const d=currentDay();if(id==="trainingStart")d.meta.trainingStart=e.target.value;else if(id==="trainingEnd")d.meta.trainingEnd=e.target.value;else if(id==="sleepStart")d.pre.sleep.start=e.target.value;else if(id==="sleepEnd")d.pre.sleep.end=e.target.value;else if(id==="napStart")d.pre.nap.start=e.target.value;else if(id==="napEnd")d.pre.nap.end=e.target.value;else d.pre.meal.time=e.target.value;renderTimeCalcs();save();}));
+function storeDayTime(id,value){
+  const d=currentDay();
+  if(id==="trainingStart")d.meta.trainingStart=value;else if(id==="trainingEnd")d.meta.trainingEnd=value;else if(id==="sleepStart")d.pre.sleep.start=value;else if(id==="sleepEnd")d.pre.sleep.end=value;else if(id==="napStart")d.pre.nap.start=value;else if(id==="napEnd")d.pre.nap.end=value;else d.pre.meal.time=value;
+  renderTimeCalcs();save();
+}
+["trainingStart","trainingEnd","sleepStart","sleepEnd","napStart","napEnd","mealTime"].forEach(id=>{
+  $(id).addEventListener("input",e=>{if(!normalizedTimeCharacters(e.target.value)){e.target.setCustomValidity("");storeDayTime(id,"");return;}if(!isCompleteTimeInput(e.target.value))return;const normalized=normalizeTimeInput(e.target.value);if(normalized===null)return;e.target.setCustomValidity("");e.target.value=normalized;storeDayTime(id,normalized);});
+  $(id).addEventListener("change",e=>{const normalized=validateTimeInput(e.target);if(normalized===null)return;storeDayTime(id,normalized);});
+});
 $("mealNote").addEventListener("input",e=>{currentDay().pre.meal.note=e.target.value;save();});
 $("daySummary").addEventListener("input",e=>{currentDay().daySummary=e.target.value;save();});
 $("dateInput").addEventListener("change",e=>{if(e.target.value){state.date=e.target.value;renderDay();}});
@@ -820,21 +854,35 @@ $("nextDay").addEventListener("click",()=>{state.date=shiftDate(state.date,1);re
 
 $("exerciseList").addEventListener("input",e=>{
   const a=e.target.dataset.action,exid=e.target.dataset.exid,phase=e.target.dataset.phase,setid=e.target.dataset.setid;
+  if(a==="set-time"){
+    if(!normalizedTimeCharacters(e.target.value)){e.target.setCustomValidity("");const s=findSet(exid,phase,setid);if(s)s.time="";save();renderBodyTotals();return;}
+    if(!isCompleteTimeInput(e.target.value))return;
+    const normalized=normalizeTimeInput(e.target.value);if(normalized===null)return;
+    e.target.value=normalized;const s=findSet(exid,phase,setid);if(s)s.time=normalized;
+    save();renderBodyTotals();return;
+  }
   if(a==="exercise-name"){const ex=findExercise(exid);if(ex)ex.name=e.target.value;}
   if(a==="exercise-tips"){const ex=findExercise(exid);if(ex)ex.tips=e.target.value;}
   if(a==="main-target"){const ex=findExercise(exid);if(ex)ex.mainTarget=e.target.value;}
   if(a==="sub-target"){const ex=findExercise(exid);if(ex)ex.subTarget=e.target.value;}
   if(a==="set-weight"){const s=findSet(exid,phase,setid);if(s)s.weight=e.target.value;}
   if(a==="set-reps"){const s=findSet(exid,phase,setid);if(s)s.reps=e.target.value;}
-  if(a==="set-time"){const s=findSet(exid,phase,setid);if(s)s.time=e.target.value;}
   if(a==="set-rpe"){const s=findSet(exid,phase,setid);if(s)s.rpe=e.target.value;}
   if(a==="set-rest"){const s=findSet(exid,phase,setid);if(s)s.rest=e.target.value;}
   if(a==="set-note"){const s=findSet(exid,phase,setid);if(s)s.note=e.target.value;}
   save();
-  if(["main-target","sub-target","set-weight","set-reps","set-time","set-rpe","set-rest","set-note"].includes(a))renderBodyTotals();
+  if(["main-target","sub-target","set-weight","set-reps","set-rpe","set-rest","set-note"].includes(a))renderBodyTotals();
 });
 $("exerciseList").addEventListener("change",e=>{
-  if(["exercise-name","set-weight","set-reps","set-time"].includes(e.target.dataset.action))renderExercises();
+  const a=e.target.dataset.action;
+  if(a==="set-time"){
+    const normalized=validateTimeInput(e.target);
+    if(normalized===null)return;
+    const s=findSet(e.target.dataset.exid,e.target.dataset.phase,e.target.dataset.setid);
+    if(s)s.time=normalized;
+    save();renderBodyTotals();
+  }
+  if(["exercise-name","set-weight","set-reps","set-time"].includes(a))renderExercises();
 });
 $("exerciseList").addEventListener("click",e=>{
   const b=e.target.closest("button[data-action]");if(!b)return;
@@ -933,7 +981,7 @@ function parseImportPayload(text,mode){
   return payload;
 }
 function downloadText(text,filename){
-  const blob=new Blob([text],{type:"text/plain;charset=utf-8"}),url=URL.createObjectURL(blob),a=document.createElement("a");
+  const blob=new Blob(["\uFEFF",text],{type:"text/plain;charset=utf-8"}),url=URL.createObjectURL(blob),a=document.createElement("a");
   a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 $("exportDay").addEventListener("click",()=>{const d=currentDay(),safe=(composedTitle(d)||"記録").replace(/[\/:*?"<>|]/g,"_");downloadText(dayHumanText(d),`筋トレ日誌_${d.date}_${safe}.txt`);showToast("この日を出力しました");});

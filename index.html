@@ -231,7 +231,7 @@ button{cursor:pointer}
         <div class="metaGrid">
           <div><div class="subLabel">ターゲット</div><input class="input" id="dayTarget" placeholder="例：胸・肩サイド・二頭"></div>
           <div><div class="subLabel">基本方針</div><input class="input" id="basicPolicy" placeholder="例：回数重視、4割25repレスト2分基準"></div>
-          <div><div class="subLabel">トレーニング時間帯（数字4桁・5分単位）</div><div class="timeRange"><input class="input clockInput" id="trainingStart" type="text" inputmode="numeric" maxlength="5" placeholder="例 1030"><span>〜</span><input class="input clockInput" id="trainingEnd" type="text" inputmode="numeric" maxlength="5" placeholder="例 1200"></div></div>
+          <div><div class="subLabel">トレーニング時間帯（数字4桁）</div><div class="timeRange"><input class="input clockInput" id="trainingStart" type="text" inputmode="numeric" maxlength="5" placeholder="例 1030"><span>〜</span><input class="input clockInput" id="trainingEnd" type="text" inputmode="numeric" maxlength="5" placeholder="例 1200"></div></div>
           <div><div class="subLabel">テーマ</div><input class="input" id="dayTheme" placeholder="例：短くする"></div>
         </div>
       </section>
@@ -354,8 +354,7 @@ function normalizeTimeInput(value){
   else if(digits){hour=Number(raw.slice(0,-2));minute=Number(raw.slice(-2));}
   else return null;
   if(hour>23||minute>59)return null;
-  const rounded=(Math.round((hour*60+minute)/5)*5)%(24*60);
-  return `${String(Math.floor(rounded/60)).padStart(2,"0")}:${String(rounded%60).padStart(2,"0")}`;
+  return `${String(hour).padStart(2,"0")}:${String(minute).padStart(2,"0")}`;
 }
 function nowTime(){ const d=new Date(); return normalizeTimeInput(`${d.getHours()}:${String(d.getMinutes()).padStart(2,"0")}`); }
 function validateTimeInput(input){

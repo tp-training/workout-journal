@@ -103,7 +103,14 @@ button{cursor:pointer}
 .tipsGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .subLabel{font-size:12px;font-weight:950;color:var(--muted);margin-bottom:6px}
 .previousTips{border:1px solid var(--line);border-radius:12px;background:var(--panel2);padding:10px;min-height:108px;font-size:13px;line-height:1.55;white-space:pre-wrap}
-.phase{padding:14px;border-bottom:1px solid var(--line)}
+.phase{padding:14px;border-bottom:1px solid var(--line);border-left:6px solid transparent;margin:10px;border-radius:14px;overflow:hidden}
+.phase-warmup{border-color:var(--blue);background:color-mix(in srgb,var(--panel) 94%,var(--blueBg))}
+.phase-main{border-color:#f97316;background:color-mix(in srgb,var(--panel) 92%,#fff7ed)}
+.phase-supplement{border-color:#16a34a;background:color-mix(in srgb,var(--panel) 92%,var(--greenBg))}
+@media(prefers-color-scheme:dark){
+  .phase-main{border-color:#fb923c;background:color-mix(in srgb,var(--panel) 90%,#431407)}
+  .phase-supplement{border-color:#4ade80}
+}
 .phase:last-child{border-bottom:0}
 .phaseHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
 .phaseTitle{font-size:15px;font-weight:950}
@@ -133,6 +140,16 @@ button{cursor:pointer}
 .prTable th,.prTable td{padding:6px 4px;border-bottom:1px solid var(--line);text-align:right}
 .prTable th:first-child,.prTable td:first-child{text-align:left}
 .prTable th{font-size:10px;color:var(--muted)}
+.exerciseTypeRow{display:grid;grid-template-columns:minmax(150px,240px) 1fr;gap:9px;align-items:end;margin-top:9px}
+.reflectionBox{padding:14px;border-bottom:1px solid var(--line);background:var(--panel2)}
+.reflectionGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.reflectionGrid .textarea{min-height:105px}
+.cardioArea{padding:14px}
+.cardioSegment{border:1px solid var(--line);border-left:5px solid #0ea5e9;border-radius:14px;padding:10px;background:var(--panel);margin-top:9px}
+.cardioSegmentHead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;font-weight:950}
+.cardioGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.cardioGrid .textarea{min-height:88px}
+.cardioSummary{display:flex;gap:7px;flex-wrap:wrap;margin:8px 0}
 .addExerciseCard{text-align:center;padding:18px}
 .toolbar{
   position:fixed;left:var(--sidebar);right:0;bottom:0;z-index:35;
@@ -173,6 +190,9 @@ button{cursor:pointer}
   .fieldLabel{display:block;font-size:9px;color:var(--muted);font-weight:850;margin:0 0 3px 2px}
   .toolbarInner{grid-template-columns:1.2fr 1fr 1fr}
   .toolbar .btn{font-size:11px;padding:8px 5px}
+  .reflectionGrid{grid-template-columns:1fr}
+  .cardioGrid{grid-template-columns:1fr 1fr}
+  .exerciseTypeRow{grid-template-columns:1fr}
 }
 @media(min-width:661px){.fieldLabel{display:none}}
 
@@ -312,10 +332,10 @@ button{cursor:pointer}
 "use strict";
 
 const STORAGE_KEY = "workoutMemoApp.v1.days";
-const MAGIC_DAY = "WORKOUT_MEMO_APP_EXPORT_V7_DAY";
-const MAGIC_ALL = "WORKOUT_MEMO_APP_EXPORT_V7_ALL";
-const LEGACY_MAGIC_DAY = "WORKOUT_MEMO_APP_EXPORT_V6_DAY";
-const LEGACY_MAGIC_ALL = "WORKOUT_MEMO_APP_EXPORT_V6_ALL";
+const MAGIC_DAY = "WORKOUT_MEMO_APP_EXPORT_V8_DAY";
+const MAGIC_ALL = "WORKOUT_MEMO_APP_EXPORT_V8_ALL";
+const LEGACY_MAGIC_DAYS = ["WORKOUT_MEMO_APP_EXPORT_V7_DAY","WORKOUT_MEMO_APP_EXPORT_V6_DAY"];
+const LEGACY_MAGIC_ALLS = ["WORKOUT_MEMO_APP_EXPORT_V7_ALL","WORKOUT_MEMO_APP_EXPORT_V6_ALL"];
 const JSON_BEGIN = "=== DATA_JSON_BEGIN ===";
 const JSON_END = "=== DATA_JSON_END ===";
 const PHASES = [
@@ -375,9 +395,9 @@ function nowTime(){ const d=new Date(); return normalizeTimeInput(`${d.getHours(
 function validateTimeInput(input){
   const normalized=normalizeTimeInput(input.value);
   if(normalized===null){
-    input.setCustomValidity("時刻は1030または10:30の形式で入力してください（00:00〜23:59）");
-    input.reportValidity();
-    showToast("時刻を数字4桁で入力してください（例：1030）");
+    input.value="";
+    input.setCustomValidity("");
+    showToast("無効な時刻を削除しました（例：1030）");
     return null;
   }
   input.setCustomValidity("");
@@ -540,14 +560,16 @@ async function flushPendingSaves(){
   }));
 }
 function blankSet(){ return {id:uid(),weight:"",reps:"",time:"",rpe:"",rest:"",note:""}; }
+function blankCardioSegment(){ return {id:uid(),duration:"",distance:"",incline:"",speed:"",intensity:"",cadence:"",heartRate:"",rpe:"",note:"",rest:""}; }
 function blankBody(){ return {id:uid(),part:"",exercises:"",sets:""}; }
-function blankExercise(name=""){ return {id:uid(),name,mainTarget:"",subTarget:"",caution:false,tips:"",blocks:{warmup:[blankSet()],main:[blankSet()],supplement:[blankSet()]}}; }
-function blankDay(date){ const now=new Date().toISOString();return {version:7,recordId:uid(),date,createdAt:now,meta:{target:"",basicPolicy:"",trainingStart:"",trainingEnd:"",theme:""},pre:{sleep:{start:"",end:""},nap:{start:"",end:""},meal:{time:"",note:""}},bodyTotals:{main:[blankBody()],sub:[blankBody()]},daySummary:"",exercises:[],updatedAt:now}; }
-function duplicateDayRecord(source){
+function blankExercise(name=""){ return {id:uid(),type:"strength",name,mainTarget:"",subTarget:"",caution:false,tips:"",reflection:{improvement:"",cause:"",action:""},blocks:{warmup:[blankSet()],main:[blankSet()],supplement:[blankSet()]},cardioSegments:[blankCardioSegment()]}; }
+function blankDay(date){ const now=new Date().toISOString();return {version:8,recordId:uid(),date,createdAt:now,meta:{target:"",basicPolicy:"",trainingStart:"",trainingEnd:"",theme:""},pre:{sleep:{start:"",end:""},nap:{start:"",end:""},meal:{time:"",note:""}},bodyTotals:{main:[blankBody()],sub:[blankBody()]},daySummary:"",exercises:[],updatedAt:now}; }
+function duplicateDayRecord(source,markForDateChange=false){
   const copy=JSON.parse(JSON.stringify(source)),now=new Date().toISOString();
-  copy.version=7;copy.recordId=uid();copy.createdAt=now;copy.updatedAt=now;
+  copy.version=8;copy.recordId=uid();copy.createdAt=now;copy.updatedAt=now;
+  if(markForDateChange)copy.duplicateSourceId=source.recordId;else delete copy.duplicateSourceId;
   [copy.bodyTotals?.main||[],copy.bodyTotals?.sub||[]].flat().forEach(row=>row.id=uid());
-  (copy.exercises||[]).forEach(ex=>{ex.id=uid();PHASES.forEach(([phase])=>(ex.blocks?.[phase]||[]).forEach(set=>set.id=uid()));});
+  (copy.exercises||[]).forEach(ex=>{ex.id=uid();PHASES.forEach(([phase])=>(ex.blocks?.[phase]||[]).forEach(set=>set.id=uid()));(ex.cardioSegments||[]).forEach(segment=>segment.id=uid());});
   return copy;
 }
 function normalizeBody(r){ return {id:r?.id||uid(),part:String(r?.part||""),exercises:r?.exercises??"",sets:r?.sets??""}; }
@@ -555,21 +577,23 @@ function migrateAll(){
   const migrated={};
   Object.entries(state.days).forEach(([key,value])=>{
     const raw=ensureDayIdentity(value||{}),oldTitle=String(raw.title||"");
-    const day={version:7,recordId:raw.recordId,date:raw.date||key,createdAt:raw.createdAt,
+    const day={version:8,recordId:raw.recordId,date:raw.date||key,createdAt:raw.createdAt,
       meta:{target:String(raw.meta?.target||""),basicPolicy:String(raw.meta?.basicPolicy||""),trainingStart:String(raw.meta?.trainingStart||""),trainingEnd:String(raw.meta?.trainingEnd||""),theme:String(raw.meta?.theme||oldTitle)},
       pre:{sleep:{start:String(raw.pre?.sleep?.start||""),end:String(raw.pre?.sleep?.end||"")},nap:{start:String(raw.pre?.nap?.start||""),end:String(raw.pre?.nap?.end||"")},meal:{time:String(raw.pre?.meal?.time||""),note:String(raw.pre?.meal?.note||"")}},
       bodyTotals:{main:(Array.isArray(raw.bodyTotals?.main)&&raw.bodyTotals.main.length?raw.bodyTotals.main:[blankBody()]).map(normalizeBody),sub:(Array.isArray(raw.bodyTotals?.sub)&&raw.bodyTotals.sub.length?raw.bodyTotals.sub:[blankBody()]).map(normalizeBody)},
       daySummary:String(raw.daySummary??raw.dayNote??""),exercises:[],updatedAt:raw.updatedAt||new Date().toISOString()};
+    if(raw.duplicateSourceId)day.duplicateSourceId=String(raw.duplicateSourceId);
     day.exercises=(Array.isArray(raw.exercises)?raw.exercises:[]).map(ex=>{
-      const out={id:ex.id||uid(),name:String(ex.name||""),mainTarget:String(ex.mainTarget||""),subTarget:String(ex.subTarget||""),caution:Boolean(ex.caution),tips:String(ex.tips||""),blocks:{warmup:[],main:[],supplement:[]}};
+      const out={id:ex.id||uid(),type:ex.type==="cardio"?"cardio":"strength",name:String(ex.name||""),mainTarget:String(ex.mainTarget||""),subTarget:String(ex.subTarget||""),caution:Boolean(ex.caution),tips:String(ex.tips||""),reflection:{improvement:String(ex.reflection?.improvement||""),cause:String(ex.reflection?.cause||""),action:String(ex.reflection?.action||"")},blocks:{warmup:[],main:[],supplement:[]},cardioSegments:(Array.isArray(ex.cardioSegments)?ex.cardioSegments:[]).map(normalizeCardioSegment)};
       if(ex.blocks) PHASES.forEach(([key])=>out.blocks[key]=(Array.isArray(ex.blocks[key])?ex.blocks[key]:[]).map(normalizeSet));
       else out.blocks.main=(Array.isArray(ex.sets)?ex.sets:[]).map(normalizeSet);
-      PHASES.forEach(([key])=>{if(!out.blocks[key].length)out.blocks[key]=[blankSet()]});return out;
+      PHASES.forEach(([key])=>{if(!out.blocks[key].length)out.blocks[key]=[blankSet()]});if(!out.cardioSegments.length)out.cardioSegments=[blankCardioSegment()];return out;
     });migrated[day.recordId]=day;
   });
   state.days=migrated;
 }
 function normalizeSet(s){ return {id:s?.id||uid(),weight:s?.weight??"",reps:s?.reps??"",time:String(s?.time||""),rpe:s?.rpe??"",rest:s?.rest??"",note:String(s?.note||"")}; }
+function normalizeCardioSegment(s){ return {id:s?.id||uid(),duration:s?.duration??"",distance:s?.distance??"",incline:s?.incline??"",speed:s?.speed??"",intensity:String(s?.intensity||""),cadence:s?.cadence??"",heartRate:s?.heartRate??"",rpe:s?.rpe??"",note:String(s?.note||""),rest:s?.rest??""}; }
 function recordsForDate(date){return Object.values(state.days).filter(day=>day?.date===date).sort((a,b)=>String(b.updatedAt||b.createdAt||"").localeCompare(String(a.updatedAt||a.createdAt||"")));}
 function currentDay(){
   if(state.currentId&&state.days[state.currentId])return state.days[state.currentId];
@@ -633,6 +657,16 @@ function previousSession(name){ return sessionsFor(name,true)[0]||null; }
 function previousTips(name){
   return sessionsFor(name,true).find(x=>String(x.ex.tips||"").trim())||null;
 }
+function previousTargets(name){
+  return sessionsFor(name,true).find(x=>String(x.ex.mainTarget||"").trim()||String(x.ex.subTarget||"").trim())||null;
+}
+function autofillTargets(ex){
+  const previous=previousTargets(ex.name);if(!previous)return false;
+  let changed=false;
+  if(!String(ex.mainTarget||"").trim()&&String(previous.ex.mainTarget||"").trim()){ex.mainTarget=previous.ex.mainTarget;changed=true;}
+  if(!String(ex.subTarget||"").trim()&&String(previous.ex.subTarget||"").trim()){ex.subTarget=previous.ex.subTarget;changed=true;}
+  return changed;
+}
 function previousPhase(name,phase){
   const s=previousSession(name);if(!s)return null;
   return {date:s.date,title:s.title,sets:s.ex.blocks?.[phase]||[]};
@@ -644,7 +678,12 @@ function allSetsForExercise(name,excludeCurrent=false){
     if(excludeCurrent&&d.recordId===state.currentId)return;
     (d.exercises||[]).forEach(ex=>{
       if(normalizeName(ex.name)!==key)return;
-      (ex.blocks?.main||[]).forEach(s=>out.push({day:d,phase:"main",set:s}));
+      const counts=new Map();
+      (ex.blocks?.main||[]).forEach(s=>{
+        const w=Number(s.weight),valid=s.weight!==""&&Number.isFinite(w),key=valid?String(w):"";
+        const ordinal=valid?(counts.set(key,(counts.get(key)||0)+1),counts.get(key)):null;
+        out.push({day:d,phase:"main",set:s,ordinal});
+      });
     });
   });
   return out;
@@ -653,22 +692,26 @@ function bestsFor(name){
   const map=new Map();
   allSetsForExercise(name,false).forEach(x=>{
     const w=Number(x.set.weight),r=Number(x.set.reps);
-    if(x.set.weight===""||x.set.reps===""||!Number.isFinite(w)||!Number.isFinite(r))return;
-    const k=String(w),old=map.get(k);
-    if(!old||r>old.reps)map.set(k,{weight:w,reps:r,date:x.day.date,phase:x.phase});
+    if(x.set.weight===""||x.set.reps===""||!Number.isFinite(w)||!Number.isFinite(r)||!x.ordinal)return;
+    const k=`${w}|${x.ordinal}`,old=map.get(k);
+    if(!old||r>old.reps)map.set(k,{weight:w,ordinal:x.ordinal,reps:r,date:x.day.date,phase:x.phase});
   });
-  return [...map.values()].sort((a,b)=>a.weight-b.weight);
+  return [...map.values()].sort((a,b)=>a.weight-b.weight||a.ordinal-b.ordinal);
 }
-function isNewPR(name,weight,reps){
+function sameWeightOrdinal(sets,index){
+  const value=Number(sets[index]?.weight);if(sets[index]?.weight===""||!Number.isFinite(value))return null;
+  return sets.slice(0,index+1).filter(s=>s.weight!==""&&Number(s.weight)===value).length;
+}
+function isNewPR(name,weight,reps,ordinal){
   if(weight===""||reps==="")return false;
-  const w=Number(weight),r=Number(reps);if(!Number.isFinite(w)||!Number.isFinite(r))return false;
+  const w=Number(weight),r=Number(reps);if(!Number.isFinite(w)||!Number.isFinite(r)||!ordinal)return false;
   const map=new Map();
   allSetsForExercise(name,true).forEach(x=>{
     const ww=Number(x.set.weight),rr=Number(x.set.reps);
-    if(x.set.weight===""||x.set.reps===""||!Number.isFinite(ww)||!Number.isFinite(rr))return;
-    map.set(ww,Math.max(map.get(ww)??-Infinity,rr));
+    if(x.set.weight===""||x.set.reps===""||!Number.isFinite(ww)||!Number.isFinite(rr)||!x.ordinal)return;
+    const key=`${ww}|${x.ordinal}`;map.set(key,Math.max(map.get(key)??-Infinity,rr));
   });
-  return !map.has(w)||r>map.get(w);
+  const key=`${w}|${ordinal}`;return !map.has(key)||r>map.get(key);
 }
 function countExerciseSessions(name){ return sessionsFor(name).length; }
 function firstMainWeight(ex){const s=ex.blocks?.main?.[0];const w=Number(s?.weight);return s&&s.weight!==""&&Number.isFinite(w)&&w>0?w:null;}
@@ -681,7 +724,7 @@ function formatSet(s,i){
 function searchText(day){
   const parts=[day.date,day.meta.target,day.meta.basicPolicy,day.meta.trainingStart,day.meta.trainingEnd,day.meta.theme,day.daySummary,day.pre.sleep.start,day.pre.sleep.end,day.pre.nap.start,day.pre.nap.end,day.pre.meal.time,day.pre.meal.note];
   [...day.bodyTotals.main,...day.bodyTotals.sub].forEach(r=>parts.push(r.part,r.exercises,r.sets));
-  (day.exercises||[]).forEach(ex=>{parts.push(ex.name,ex.mainTarget,ex.subTarget,ex.caution?"注意":"",ex.tips);PHASES.forEach(([p])=>(ex.blocks?.[p]||[]).forEach(s=>parts.push(s.weight,s.reps,s.time,s.rpe,s.rest,s.note)))});
+  (day.exercises||[]).forEach(ex=>{parts.push(ex.type,ex.name,ex.mainTarget,ex.subTarget,ex.caution?"注意":"",ex.tips,ex.reflection?.improvement,ex.reflection?.cause,ex.reflection?.action);PHASES.forEach(([p])=>(ex.blocks?.[p]||[]).forEach(s=>parts.push(s.weight,s.reps,s.time,s.rpe,s.rest,s.note)));(ex.cardioSegments||[]).forEach(s=>parts.push(s.duration,s.distance,s.incline,s.speed,s.intensity,s.cadence,s.heartRate,s.rpe,s.note,s.rest));});
   return parts.join("\n").toLocaleLowerCase("ja-JP");
 }
 function refreshDatalist(){
@@ -710,6 +753,7 @@ function isRecordedMainSet(s){
 function autoBodyTotals(kind){
   const map=new Map();
   (currentDay().exercises||[]).forEach(ex=>{
+    if(ex.type==="cardio")return;
     const target=String(kind==="main"?ex.mainTarget:ex.subTarget||"").trim();
     if(!target)return;
     const setCount=(ex.blocks?.main||[]).filter(isRecordedMainSet).length;
@@ -733,6 +777,7 @@ function renderBodyTotals(){
 function autoBodyTotalsForDay(day,kind){
   const map=new Map();
   (day.exercises||[]).forEach(ex=>{
+    if(ex.type==="cardio")return;
     const target=String(kind==="main"?ex.mainTarget:ex.subTarget||"").trim();
     if(!target)return;
     const setCount=(ex.blocks?.main||[]).filter(isRecordedMainSet).length;
@@ -745,14 +790,14 @@ function autoBodyTotalsForDay(day,kind){
 }
 function renderPRTable(name){
   const bests=bestsFor(name);
-  if(!bests.length)return `<div class="hint">重量と回数を記録すると、ここに重量別自己ベストが表示されます。</div>`;
-  return `<table class="prTable"><thead><tr><th>重量</th><th>最高回数</th><th>記録日</th></tr></thead><tbody>
-    ${bests.slice(0,30).map(x=>`<tr><td>${x.weight}kg</td><td>${x.reps}回</td><td>${x.date}</td></tr>`).join("")}
+  if(!bests.length)return `<div class="hint">重量・同重量内のセット順・回数ごとの自己ベストが表示されます。</div>`;
+  return `<table class="prTable"><thead><tr><th>重量</th><th>同重量内</th><th>最高回数</th><th>記録日</th></tr></thead><tbody>
+    ${bests.slice(0,60).map(x=>`<tr><td>${x.weight}kg</td><td>${x.ordinal}セット目</td><td>${x.reps}回</td><td>${x.date}</td></tr>`).join("")}
   </tbody></table>`;
 }
 function renderPhase(ex,phase,label){
   const sets=ex.blocks[phase]||[],prev=previousPhase(ex.name,phase);
-  return `<section class="phase">
+  return `<section class="phase phase-${phase}">
     <div class="phaseHead">
       <div>
         <div class="phaseTitle">${label}</div>
@@ -794,7 +839,7 @@ function renderPhase(ex,phase,label){
           <button class="btn small danger deleteSet" data-action="remove-set" data-exid="${ex.id}" data-phase="${phase}" data-setid="${s.id}">×</button>
         </div>
         <textarea class="textarea setNote" data-action="set-note" data-exid="${ex.id}" data-phase="${phase}" data-setid="${s.id}" placeholder="このセット単位のメモ">${esc(s.note)}</textarea>
-        <div class="rowMeta">${phase==="main"&&isNewPR(ex.name,s.weight,s.reps)?'<span class="prCandidate">★ この重量で自己ベスト候補</span>':""}</div>
+        <div class="rowMeta">${phase==="main"&&isNewPR(ex.name,s.weight,s.reps,sameWeightOrdinal(sets,i))?`<span class="prCandidate">★ ${esc(s.weight)}kg・同重量内${sameWeightOrdinal(sets,i)}セット目の自己ベスト候補</span>`:""}</div>
       </div>`).join("")}
     </div>
     <div class="phaseActions">
@@ -803,9 +848,43 @@ function renderPhase(ex,phase,label){
       <button class="btn small" data-action="stamp-last-time" data-exid="${ex.id}" data-phase="${phase}">最新セットに現在時刻</button>
     </div>
     ${phase==="main"?`<div class="prBox">
-      <div class="prTitle"><span>過去の同種目・重量ごとの自己ベスト</span><span class="chip">重量昇順</span></div>
+      <div class="prTitle"><span>過去の同種目・重量・セット順ごとの自己ベスト</span><span class="chip">重量昇順</span></div>
       ${renderPRTable(ex.name)}
     </div>`:""}
+  </section>`;
+}
+function cardioTotals(ex){
+  return (ex.cardioSegments||[]).reduce((total,s)=>{
+    const duration=Number(s.duration),distance=Number(s.distance);
+    if(s.duration!==""&&Number.isFinite(duration))total.duration+=duration;
+    if(s.distance!==""&&Number.isFinite(distance))total.distance+=distance;
+    return total;
+  },{duration:0,distance:0});
+}
+function cardioField(ex,segment,action,label,{suffix="",step="any",placeholder=""}={}){
+  return `<div><div class="subLabel">${label}</div><div class="field"><input class="input" type="number" inputmode="decimal" min="0" step="${step}" data-action="${action}" data-exid="${ex.id}" data-segmentid="${segment.id}" value="${esc(segment[action.replace("cardio-","")]??"")}" placeholder="${placeholder}">${suffix?`<span class="suffix">${suffix}</span>`:""}</div></div>`;
+}
+function renderCardio(ex){
+  const segments=ex.cardioSegments||[],totals=cardioTotals(ex);
+  return `<section class="cardioArea">
+    <div class="phaseHead"><div><div class="phaseTitle">有酸素の区間</div><div class="phaseDesc">負荷やペースが変わるたびに区間を追加できます</div></div><span class="chip">${segments.length}区間</span></div>
+    <div class="cardioSummary"><span class="chip">合計運動時間 ${totals.duration||0}分</span><span class="chip">合計距離 ${Math.round(totals.distance*1000)/1000||0}km</span></div>
+    ${segments.map((s,i)=>`<div class="cardioSegment">
+      <div class="cardioSegmentHead"><span>区間 ${i+1}</span><button class="btn small danger" data-action="remove-cardio-segment" data-exid="${ex.id}" data-segmentid="${s.id}">×</button></div>
+      <div class="cardioGrid">
+        ${cardioField(ex,s,"cardio-duration","運動時間",{suffix:"分",step:"0.5",placeholder:"例：20"})}
+        ${cardioField(ex,s,"cardio-distance","距離",{suffix:"km",step:"0.01",placeholder:"例：3.5"})}
+        ${cardioField(ex,s,"cardio-incline","傾斜",{suffix:"%",step:"0.1",placeholder:"例：5"})}
+        ${cardioField(ex,s,"cardio-speed","速度",{suffix:"km/h",step:"0.1",placeholder:"例：6.0"})}
+        <div><div class="subLabel">強度・負荷</div><input class="input" data-action="cardio-intensity" data-exid="${ex.id}" data-segmentid="${s.id}" value="${esc(s.intensity)}" placeholder="例：レベル8"></div>
+        ${cardioField(ex,s,"cardio-cadence","ケイデンス",{suffix:"rpm",step:"1"})}
+        ${cardioField(ex,s,"cardio-heartRate","心拍数",{suffix:"bpm",step:"1"})}
+        ${cardioField(ex,s,"cardio-rpe","RPE",{step:"0.5"})}
+        <div style="grid-column:1/-1"><div class="subLabel">メモ</div><textarea class="textarea" data-action="cardio-note" data-exid="${ex.id}" data-segmentid="${s.id}" placeholder="この区間のメモ">${esc(s.note)}</textarea></div>
+        ${cardioField(ex,s,"cardio-rest","レスト（区間後）",{suffix:"分",step:"0.5",placeholder:"例：2"})}
+      </div>
+    </div>`).join("")}
+    <div class="phaseActions"><button class="btn small primary" data-action="add-cardio-segment" data-exid="${ex.id}">＋ 区間を追加</button><button class="btn small" data-action="duplicate-cardio-segment" data-exid="${ex.id}">最後の区間を複製</button></div>
   </section>`;
 }
 function renderExercises(){
@@ -826,8 +905,12 @@ function renderExercises(){
           <div><div class="subLabel">メイン部位</div><input class="input" data-action="main-target" data-exid="${ex.id}" value="${esc(ex.mainTarget)}" placeholder="例：胸"></div>
           <div><div class="subLabel">サブ部位</div><input class="input" data-action="sub-target" data-exid="${ex.id}" value="${esc(ex.subTarget)}" placeholder="例：三頭"></div>
         </div>
+        <div class="exerciseTypeRow">
+          <div><div class="subLabel">種目タイプ</div><select class="select" data-action="exercise-type" data-exid="${ex.id}"><option value="strength" ${ex.type!=="cardio"?"selected":""}>筋力トレーニング</option><option value="cardio" ${ex.type==="cardio"?"selected":""}>有酸素運動</option></select></div>
+          <div class="hint">タイプを切り替えても、入力済みの筋トレ・有酸素データは保持されます。</div>
+        </div>
         <div class="exerciseStats">
-          <span class="chip">本番開始 ${firstMainTime(ex)===9999?"未入力":String(Math.floor(firstMainTime(ex)/60)).padStart(2,"0")+":"+String(firstMainTime(ex)%60).padStart(2,"0")}</span>
+          ${ex.type!=="cardio"?`<span class="chip">本番開始 ${firstMainTime(ex)===9999?"未入力":String(Math.floor(firstMainTime(ex)/60)).padStart(2,"0")+":"+String(firstMainTime(ex)%60).padStart(2,"0")}</span>`:`<span class="chip">有酸素 ${ex.cardioSegments.length}区間</span>`}
           ${previousSession(ex.name)?`<span class="chip">前回 ${previousSession(ex.name).date}</span>`:"<span class='chip'>初回</span>"}
           <button class="cautionTag ${ex.caution?"active":""}" data-action="toggle-caution" data-exid="${ex.id}" type="button">注意</button>
           ${previousSession(ex.name)?.ex?.caution?`<span class="prevCaution">前回：注意</span>`:""}
@@ -849,7 +932,16 @@ function renderExercises(){
         </div>
       </section>
 
-      ${PHASES.map(([p,l])=>renderPhase(ex,p,l)).join("")}
+      <section class="reflectionBox">
+        <p class="sectionLabel">種目全体の振り返り</p>
+        <div class="reflectionGrid">
+          <div><div class="subLabel">改善点</div><textarea class="textarea" data-action="reflection-improvement" data-exid="${ex.id}" placeholder="改善したいこと（なければ空欄）">${esc(ex.reflection.improvement)}</textarea></div>
+          <div><div class="subLabel">原因</div><textarea class="textarea" data-action="reflection-cause" data-exid="${ex.id}" placeholder="考えられる原因（なければ空欄）">${esc(ex.reflection.cause)}</textarea></div>
+          <div><div class="subLabel">対策</div><textarea class="textarea" data-action="reflection-action" data-exid="${ex.id}" placeholder="次回試す対策（なければ空欄）">${esc(ex.reflection.action)}</textarea></div>
+        </div>
+      </section>
+
+      ${ex.type==="cardio"?renderCardio(ex):PHASES.map(([p,l])=>renderPhase(ex,p,l)).join("")}
     </article>`;
   }).join("");
 }
@@ -861,6 +953,7 @@ function renderDay(){
 
 function findExercise(id){ return currentDay().exercises.find(x=>x.id===id); }
 function findSet(exid,phase,setid){ return findExercise(exid)?.blocks?.[phase]?.find(s=>s.id===setid); }
+function findCardioSegment(exid,segmentid){ return findExercise(exid)?.cardioSegments?.find(s=>s.id===segmentid); }
 function addExercise(name=""){
   const ex=blankExercise(name);
   const day=currentDay();
@@ -889,16 +982,23 @@ function storeDayTime(id,value){
 }
 ["trainingStart","trainingEnd","sleepStart","sleepEnd","napStart","napEnd","mealTime"].forEach(id=>{
   $(id).addEventListener("input",e=>{if(!normalizedTimeCharacters(e.target.value)){e.target.setCustomValidity("");storeDayTime(id,"");return;}if(!isCompleteTimeInput(e.target.value))return;const normalized=normalizeTimeInput(e.target.value);if(normalized===null)return;e.target.setCustomValidity("");e.target.value=normalized;storeDayTime(id,normalized);});
-  $(id).addEventListener("change",e=>{const normalized=validateTimeInput(e.target);if(normalized===null)return;storeDayTime(id,normalized);});
+  $(id).addEventListener("change",e=>{const normalized=validateTimeInput(e.target);storeDayTime(id,normalized??"");});
+  $(id).addEventListener("blur",e=>{const normalized=validateTimeInput(e.target);storeDayTime(id,normalized??"");});
 });
 $("mealNote").addEventListener("input",e=>{currentDay().pre.meal.note=e.target.value;save();});
 $("daySummary").addEventListener("input",e=>{currentDay().daySummary=e.target.value;save();});
-$("dateInput").addEventListener("change",e=>{if(e.target.value)openDate(e.target.value);});
+$("dateInput").addEventListener("change",e=>{
+  if(!e.target.value)return;
+  const day=currentDay(),oldDate=day.date;
+  if(e.target.value===oldDate)return;
+  if(!day.duplicateSourceId){openDate(e.target.value);return;}
+  day.date=e.target.value;delete day.duplicateSourceId;state.date=day.date;save();renderDay();showToast(`複製した内容を ${day.date} へ移動しました`);
+});
 $("prevDay").addEventListener("click",()=>openDate(shiftDate(state.date,-1)));
 $("nextDay").addEventListener("click",()=>openDate(shiftDate(state.date,1)));
 
 $("exerciseList").addEventListener("input",e=>{
-  const a=e.target.dataset.action,exid=e.target.dataset.exid,phase=e.target.dataset.phase,setid=e.target.dataset.setid;
+  const a=e.target.dataset.action,exid=e.target.dataset.exid,phase=e.target.dataset.phase,setid=e.target.dataset.setid,segmentid=e.target.dataset.segmentid;
   if(a==="set-time"){
     if(!normalizedTimeCharacters(e.target.value)){e.target.setCustomValidity("");const s=findSet(exid,phase,setid);if(s)s.time="";save();renderBodyTotals();return;}
     if(!isCompleteTimeInput(e.target.value))return;
@@ -906,8 +1006,11 @@ $("exerciseList").addEventListener("input",e=>{
     e.target.value=normalized;const s=findSet(exid,phase,setid);if(s)s.time=normalized;
     save();renderBodyTotals();return;
   }
-  if(a==="exercise-name"){const ex=findExercise(exid);if(ex)ex.name=e.target.value;}
+  if(a==="exercise-name"){const ex=findExercise(exid);if(ex){ex.name=e.target.value;autofillTargets(ex);}}
   if(a==="exercise-tips"){const ex=findExercise(exid);if(ex)ex.tips=e.target.value;}
+  if(a==="reflection-improvement"){const ex=findExercise(exid);if(ex)ex.reflection.improvement=e.target.value;}
+  if(a==="reflection-cause"){const ex=findExercise(exid);if(ex)ex.reflection.cause=e.target.value;}
+  if(a==="reflection-action"){const ex=findExercise(exid);if(ex)ex.reflection.action=e.target.value;}
   if(a==="main-target"){const ex=findExercise(exid);if(ex)ex.mainTarget=e.target.value;}
   if(a==="sub-target"){const ex=findExercise(exid);if(ex)ex.subTarget=e.target.value;}
   if(a==="set-weight"){const s=findSet(exid,phase,setid);if(s)s.weight=e.target.value;}
@@ -915,6 +1018,10 @@ $("exerciseList").addEventListener("input",e=>{
   if(a==="set-rpe"){const s=findSet(exid,phase,setid);if(s)s.rpe=e.target.value;}
   if(a==="set-rest"){const s=findSet(exid,phase,setid);if(s)s.rest=e.target.value;}
   if(a==="set-note"){const s=findSet(exid,phase,setid);if(s)s.note=e.target.value;}
+  if(a?.startsWith("cardio-")){
+    const segment=findCardioSegment(exid,segmentid),field=a.slice(7);
+    if(segment&&Object.hasOwn(segment,field))segment[field]=e.target.value;
+  }
   save();
   if(["main-target","sub-target","set-weight","set-reps","set-rpe","set-rest","set-note"].includes(a))renderBodyTotals();
 });
@@ -922,16 +1029,33 @@ $("exerciseList").addEventListener("change",e=>{
   const a=e.target.dataset.action;
   if(a==="set-time"){
     const normalized=validateTimeInput(e.target);
-    if(normalized===null)return;
     const s=findSet(e.target.dataset.exid,e.target.dataset.phase,e.target.dataset.setid);
-    if(s)s.time=normalized;
+    if(s)s.time=normalized??"";
     save();renderBodyTotals();
+  }
+  if(a==="exercise-type"){
+    const ex=findExercise(e.target.dataset.exid);if(ex)ex.type=e.target.value==="cardio"?"cardio":"strength";save();renderExercises();renderBodyTotals();
+  }
+  if(a==="exercise-name"){
+    const ex=findExercise(e.target.dataset.exid);if(ex&&autofillTargets(ex)){save();showToast("過去の履歴から部位を入力しました");}
   }
   if(["exercise-name","set-weight","set-reps","set-time"].includes(a))renderExercises();
 });
+$("exerciseList").addEventListener("focusout",e=>{
+  const a=e.target.dataset.action;
+  if(a==="set-time"){
+    const normalized=validateTimeInput(e.target),s=findSet(e.target.dataset.exid,e.target.dataset.phase,e.target.dataset.setid);
+    if(s)s.time=normalized??"";
+    save();renderExercises();renderBodyTotals();return;
+  }
+  if(a==="exercise-name"){
+    const ex=findExercise(e.target.dataset.exid);if(ex)autofillTargets(ex);save();renderExercises();renderBodyTotals();return;
+  }
+  if(["set-weight","set-reps"].includes(a))renderExercises();
+});
 $("exerciseList").addEventListener("click",e=>{
   const b=e.target.closest("button[data-action]");if(!b)return;
-  const a=b.dataset.action,exid=b.dataset.exid,phase=b.dataset.phase,setid=b.dataset.setid,ex=findExercise(exid);if(!ex)return;
+  const a=b.dataset.action,exid=b.dataset.exid,phase=b.dataset.phase,setid=b.dataset.setid,segmentid=b.dataset.segmentid,ex=findExercise(exid);if(!ex)return;
   if(a==="remove-exercise"){
     if(!confirm(`「${ex.name||"この種目"}」を削除しますか？`))return;
     currentDay().exercises=currentDay().exercises.filter(x=>x.id!==exid);
@@ -952,6 +1076,15 @@ $("exerciseList").addEventListener("click",e=>{
     ex.blocks[phase]=ex.blocks[phase].filter(s=>s.id!==setid);
     if(!ex.blocks[phase].length)ex.blocks[phase]=[blankSet()];
   }
+  if(a==="add-cardio-segment")ex.cardioSegments.push(blankCardioSegment());
+  if(a==="duplicate-cardio-segment"){
+    const segment=ex.cardioSegments.at(-1)||blankCardioSegment();
+    ex.cardioSegments.push({...segment,id:uid()});
+  }
+  if(a==="remove-cardio-segment"){
+    ex.cardioSegments=ex.cardioSegments.filter(s=>s.id!==segmentid);
+    if(!ex.cardioSegments.length)ex.cardioSegments=[blankCardioSegment()];
+  }
   save();renderExercises();renderBodyTotals();
 });
 
@@ -961,7 +1094,7 @@ $("duplicateCurrentDay").addEventListener("click",async()=>{
   let copy=null;
   try{
     await flushPendingSaves();
-    copy=duplicateDayRecord(source);state.days[copy.recordId]=copy;state.currentId=copy.recordId;state.date=copy.date;
+    copy=duplicateDayRecord(source,true);state.days[copy.recordId]=copy;state.currentId=copy.recordId;state.date=copy.date;
     await idbPutDay(copy);renderDay();showToast(`${copy.date} の記録を複製しました`);await refreshStorageInfo();
   }catch(err){if(copy)delete state.days[copy.recordId];state.currentId=source.recordId;state.date=source.date;renderDay();console.error(err);alert("複製に失敗しました。");}
 });
@@ -994,10 +1127,17 @@ function dayHumanText(day){
   sortExercisesInPlace(day);
   const lines=[MAGIC_DAY,`日付: ${day.date}`,`ターゲット: ${day.meta.target}`,`基本方針: ${day.meta.basicPolicy}`,`トレーニング時間帯: ${day.meta.trainingStart||"—"}-${day.meta.trainingEnd||"—"}`,`テーマ: ${day.meta.theme}`,"","■ 事前情報",`睡眠: ${day.pre.sleep.start||"—"}-${day.pre.sleep.end||"—"} / ${fmtDur(diffForward(day.pre.sleep.start,day.pre.sleep.end))} / トレ開始の${fmtDur(diffBack(day.pre.sleep.end,day.meta.trainingStart))}前`,`昼寝: ${day.pre.nap.start||"—"}-${day.pre.nap.end||"—"} / ${fmtDur(diffForward(day.pre.nap.start,day.pre.nap.end))} / トレ開始の${fmtDur(diffBack(day.pre.nap.end,day.meta.trainingStart))}前`,`食事: ${day.pre.meal.time||"—"} / ${day.pre.meal.note} / トレ開始の${fmtDur(diffBack(day.pre.meal.time,day.meta.trainingStart))}前`,`総トレーニング時間: ${fmtDur(diffForward(day.meta.trainingStart,day.meta.trainingEnd))}`,"","■ 部位別合計","[メイン部位]"];
   autoBodyTotalsForDay(day,"main").forEach(r=>lines.push(`${r.part}: ${r.exercises}種目 / ${r.sets}セット`));lines.push("[サブ部位]");autoBodyTotalsForDay(day,"sub").forEach(r=>lines.push(`${r.part}: ${r.exercises}種目 / ${r.sets}セット`));lines.push("","■ 1日の総括メモ",day.daySummary||"","");
-  day.exercises.forEach((ex,i)=>{lines.push(`■ 種目: ${ex.name||`種目${i+1}`}`,`メイン部位: ${ex.mainTarget||"—"}`,`サブ部位: ${ex.subTarget||"—"}`,`注意: ${ex.caution?"あり":"なし"}`,"[種目のコツ]",ex.tips||"");PHASES.forEach(([p,l])=>{lines.push("",`[${l}]`);(ex.blocks[p]||[]).forEach((set,j)=>{lines.push(`${j+1}セット目: ${set.weight===""?"—":set.weight+"kg"} × ${set.reps===""?"—":set.reps+"回"} / 時刻 ${set.time||"—"}${p==="main"&&set.rpe!==""?` / RPE ${set.rpe}`:""} / レスト ${set.rest===""?"—":set.rest+"分"}`);if(set.note)lines.push(`  メモ: ${set.note.replace(/\n/g,"\n  ")}`);});});lines.push("");});
-  lines.push(JSON_BEGIN,JSON.stringify({version:7,day},null,2),JSON_END);return lines.join("\n");
+  day.exercises.forEach((ex,i)=>{
+    lines.push(`■ 種目: ${ex.name||`種目${i+1}`}`,`種目タイプ: ${ex.type==="cardio"?"有酸素運動":"筋力トレーニング"}`,`メイン部位: ${ex.mainTarget||"—"}`,`サブ部位: ${ex.subTarget||"—"}`,`注意: ${ex.caution?"あり":"なし"}`,"[種目のコツ]",ex.tips||"","[種目全体の振り返り]",`改善点: ${ex.reflection?.improvement||"—"}`,`原因: ${ex.reflection?.cause||"—"}`,`対策: ${ex.reflection?.action||"—"}`);
+    if(ex.type==="cardio"){
+      lines.push("","[有酸素の区間]");
+      (ex.cardioSegments||[]).forEach((s,j)=>lines.push(`${j+1}区間目: 運動時間 ${s.duration===""?"—":s.duration+"分"} / 距離 ${s.distance===""?"—":s.distance+"km"} / 傾斜 ${s.incline===""?"—":s.incline+"%"} / 速度 ${s.speed===""?"—":s.speed+"km/h"} / 強度 ${s.intensity||"—"} / ケイデンス ${s.cadence===""?"—":s.cadence+"rpm"} / 心拍数 ${s.heartRate===""?"—":s.heartRate+"bpm"} / RPE ${s.rpe===""?"—":s.rpe} / メモ ${s.note||"—"} / レスト ${s.rest===""?"—":s.rest+"分"}`));
+    }else PHASES.forEach(([p,l])=>{lines.push("",`[${l}]`);(ex.blocks[p]||[]).forEach((set,j)=>{lines.push(`${j+1}セット目: ${set.weight===""?"—":set.weight+"kg"} × ${set.reps===""?"—":set.reps+"回"} / 時刻 ${set.time||"—"}${p==="main"&&set.rpe!==""?` / RPE ${set.rpe}`:""} / レスト ${set.rest===""?"—":set.rest+"分"}`);if(set.note)lines.push(`  メモ: ${set.note.replace(/\n/g,"\n  ")}`);});});
+    lines.push("");
+  });
+  lines.push(JSON_BEGIN,JSON.stringify({version:8,day},null,2),JSON_END);return lines.join("\n");
 }
-function allHumanText(){const days=recordedDays().sort((a,b)=>a.date.localeCompare(b.date)||String(a.createdAt||"").localeCompare(String(b.createdAt||""))),exportEntries=Object.fromEntries(days.map(day=>[day.recordId,day])),lines=[MAGIC_ALL,`出力日: ${todayLocal()}`,`記録件数: ${days.length}`,""];days.forEach(day=>{lines.push("==================================================",`${recordDateLabel(day)} ${composedTitle(day)}`,"==================================================","",dayHumanText(day).split(JSON_BEGIN)[0].replace(MAGIC_DAY+"\n","").trim(),"")});lines.push(JSON_BEGIN,JSON.stringify({version:7,entries:exportEntries},null,2),JSON_END);return lines.join("\n");}
+function allHumanText(){const days=recordedDays().sort((a,b)=>a.date.localeCompare(b.date)||String(a.createdAt||"").localeCompare(String(b.createdAt||""))),exportEntries=Object.fromEntries(days.map(day=>[day.recordId,day])),lines=[MAGIC_ALL,`出力日: ${todayLocal()}`,`記録件数: ${days.length}`,""];days.forEach(day=>{lines.push("==================================================",`${recordDateLabel(day)} ${composedTitle(day)}`,"==================================================","",dayHumanText(day).split(JSON_BEGIN)[0].replace(MAGIC_DAY+"\n","").trim(),"")});lines.push(JSON_BEGIN,JSON.stringify({version:8,entries:exportEntries},null,2),JSON_END);return lines.join("\n");}
 function isPlainObject(value){return Boolean(value)&&typeof value==="object"&&!Array.isArray(value);}
 function isValidDateKey(value){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(value))return false;
@@ -1007,19 +1147,19 @@ function isValidDateKey(value){
 function validateDayRecord(raw,expectedDate=null){
   const date=raw?.date;
   if(!isPlainObject(raw)||!isValidDateKey(date)||(expectedDate&&date!==expectedDate))throw new Error(`${date||expectedDate||"不明"} の日付またはレコード形式が不正です`);
-  if(Number(raw.version||6)>7)throw new Error(`${date} は未対応のVersionです`);
+  if(Number(raw.version||6)>8)throw new Error(`${date} は未対応のVersionです`);
   if(raw.recordId!=null&&typeof raw.recordId!=="string")throw new Error(`${date} の記録IDが不正です`);
   if(raw.exercises!=null&&!Array.isArray(raw.exercises))throw new Error(`${date} の種目データが不正です`);
 }
 function parseImportPayload(text,mode){
   const firstLine=text.replace(/^\uFEFF/,"").split(/\r?\n/,1)[0].trim();
-  const expected=mode==="all"?[MAGIC_ALL,LEGACY_MAGIC_ALL]:[MAGIC_DAY,LEGACY_MAGIC_DAY];
+  const expected=mode==="all"?[MAGIC_ALL,...LEGACY_MAGIC_ALLS]:[MAGIC_DAY,...LEGACY_MAGIC_DAYS];
   if(!expected.includes(firstLine))throw new Error("選択した取込種別とTXTの識別子が一致しません");
   const start=text.indexOf(JSON_BEGIN),end=text.indexOf(JSON_END,start+JSON_BEGIN.length);
   if(start<0||end<=start)throw new Error("復元用データが見つかりません");
   const payload=JSON.parse(text.slice(start+JSON_BEGIN.length,end).trim());
   const version=Number(payload?.version);
-  if(!isPlainObject(payload)||![6,7].includes(version))throw new Error("対応していないバックアップ形式です");
+  if(!isPlainObject(payload)||![6,7,8].includes(version))throw new Error("対応していないバックアップ形式です");
   if(mode==="all"){
     const source=version===6?payload.days:payload.entries;
     if(!isPlainObject(source))throw new Error("一括バックアップ形式ではありません");
@@ -1027,7 +1167,7 @@ function parseImportPayload(text,mode){
     Object.entries(source).forEach(([key,value])=>{
       validateDayRecord(value,version===6?key:null);
       const day=ensureDayIdentity({...value});
-      if(version===7&&value.recordId&&value.recordId!==key)throw new Error(`${day.date} の記録IDが一致しません`);
+      if(version>=7&&value.recordId&&value.recordId!==key)throw new Error(`${day.date} の記録IDが一致しません`);
       normalized[day.recordId]=day;
     });
     payload.normalizedEntries=normalized;

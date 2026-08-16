@@ -1,4 +1,4 @@
-const CACHE_NAME="workout-journal-pwa-v3-1-storage-4";
+const CACHE_NAME="workout-journal-pwa-v3-1-storage-5";
 const APP_SHELL=[
   "./",
   "./index.html",

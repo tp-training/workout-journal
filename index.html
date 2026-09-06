@@ -409,6 +409,7 @@ function validateTimeInput(input){
 function normalizeName(s){ return String(s||"").trim().replace(/\s+/g," ").toLocaleLowerCase("ja-JP"); }
 function esc(s){ return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c])); }
 const ENTER_FOCUS_KEYS=["action","exid","phase","setid","segmentid"];
+let enterNavigationInProgress=false;
 function enterNavigableInputs(){
   return [...document.querySelectorAll('.main input.input:not([type="date"]):not([type="file"])')]
     .filter(el=>!el.disabled&&!el.readOnly&&el.getClientRects().length>0);
@@ -429,8 +430,16 @@ function focusNextAfterEnter(current){
   const inputs=enterNavigableInputs(),index=inputs.indexOf(current),next=inputs[index+1];
   if(index<0||!next){current.blur();return;}
   const identity=focusIdentity(next);
-  current.blur();
-  setTimeout(()=>findFocusIdentity(identity)?.focus(),0);
+  const action=current.dataset.action;
+  if(action==="set-weight"||action==="set-reps"){
+    enterNavigationInProgress=true;
+    current.blur();
+    renderBodyTotals();
+  }else{
+    current.blur();
+  }
+  findFocusIdentity(identity)?.focus();
+  enterNavigationInProgress=false;
 }
 function openDb(){
   if(dbPromise)return dbPromise;
@@ -1001,12 +1010,37 @@ function addExercise(name=""){
   setTimeout(()=>document.querySelector(`[data-action="exercise-name"][data-exid="${ex.id}"]`)?.focus(),50);
 }
 window.addWorkoutExercise=()=>addExercise();
-document.addEventListener("keydown",e=>{
-  if(e.key!=="Enter"||e.isComposing||e.altKey||e.ctrlKey||e.metaKey||e.shiftKey)return;
+let suppressEnterKeyUp=false,enterKeyUpResetTimer=null;
+function armEnterKeyUpSuppression(){
+  suppressEnterKeyUp=true;
+  clearTimeout(enterKeyUpResetTimer);
+  enterKeyUpResetTimer=setTimeout(()=>{suppressEnterKeyUp=false;},180);
+}
+function consumeEnterKeyUpSuppression(){
+  suppressEnterKeyUp=false;
+  clearTimeout(enterKeyUpResetTimer);
+}
+function isEnterKeyEvent(e){return e.key==="Enter"||e.code==="Enter"||e.code==="NumpadEnter"||e.keyCode===13||e.which===13;}
+function handleEnterNavigation(e){
+  if(e.isComposing||e.altKey||e.ctrlKey||e.metaKey||e.shiftKey)return false;
   const input=e.target;
-  if(!(input instanceof HTMLInputElement)||!input.matches('.main input.input:not([type="date"]):not([type="file"])'))return;
+  if(!(input instanceof HTMLInputElement)||!input.matches('.main input.input:not([type="date"]):not([type="file"])'))return false;
   e.preventDefault();
   focusNextAfterEnter(input);
+  return true;
+}
+document.addEventListener("keydown",e=>{
+  if(isEnterKeyEvent(e)&&handleEnterNavigation(e))armEnterKeyUpSuppression();
+});
+document.addEventListener("keyup",e=>{
+  if(!isEnterKeyEvent(e))return;
+  if(suppressEnterKeyUp){e.preventDefault();consumeEnterKeyUpSuppression();return;}
+  handleEnterNavigation(e);
+});
+document.addEventListener("beforeinput",e=>{
+  if(e.inputType!=="insertLineBreak"&&e.inputType!=="insertParagraph")return;
+  if(suppressEnterKeyUp){e.preventDefault();return;}
+  if(handleEnterNavigation(e))armEnterKeyUpSuppression();
 });
 document.addEventListener("click",e=>{
   const b=e.target.closest?.("#addExercise,#addExerciseBottom");
@@ -1092,7 +1126,7 @@ $("exerciseList").addEventListener("change",e=>{
   if(a==="exercise-name"){
     const ex=findExercise(e.target.dataset.exid);if(ex&&autofillTargets(ex)){save();showToast("過去の履歴から部位を入力しました");}
   }
-  if(["exercise-name","set-weight","set-reps","set-time","cardio-time"].includes(a))renderExercises();
+  if(!enterNavigationInProgress&&["exercise-name","set-weight","set-reps","set-time","cardio-time"].includes(a))renderExercises();
 });
 $("exerciseList").addEventListener("focusout",e=>{
   const a=e.target.dataset.action;
@@ -1109,7 +1143,7 @@ $("exerciseList").addEventListener("focusout",e=>{
   if(a==="exercise-name"){
     const ex=findExercise(e.target.dataset.exid);if(ex)autofillTargets(ex);save();renderExercises();renderBodyTotals();return;
   }
-  if(["set-weight","set-reps"].includes(a))renderExercises();
+  if(!enterNavigationInProgress&&["set-weight","set-reps"].includes(a))renderExercises();
 });
 $("exerciseList").addEventListener("click",e=>{
   const b=e.target.closest("button[data-action]");if(!b)return;

@@ -406,6 +406,30 @@ function validateTimeInput(input){
   input.value=normalized;
   return normalized;
 }
+function normalizeStrengthNumber(value,integerOnly=false){
+  const raw=String(value??"").trim().normalize("NFKC").replace(/,/g,".");
+  if(raw==="")return "";
+  const valid=integerOnly?/^\d+$/.test(raw):/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(raw);
+  if(!valid)return null;
+  const number=Number(raw);
+  if(!Number.isFinite(number)||number<0)return null;
+  return String(number);
+}
+function validateStrengthNumberInput(input){
+  const action=input.dataset.action,integerOnly=action==="set-reps";
+  if(action!=="set-weight"&&!integerOnly)return input.value;
+  const normalized=normalizeStrengthNumber(input.value,integerOnly);
+  const set=findSet(input.dataset.exid,input.dataset.phase,input.dataset.setid);
+  if(normalized===null){
+    input.value="";
+    if(set)set[integerOnly?"reps":"weight"]="";
+    showToast(integerOnly?"回数は0以上の整数で入力してください":"重量は0以上の数値で入力してください");
+    return "";
+  }
+  input.value=normalized;
+  if(set)set[integerOnly?"reps":"weight"]=normalized;
+  return normalized;
+}
 function normalizeName(s){ return String(s||"").trim().replace(/\s+/g," ").toLocaleLowerCase("ja-JP"); }
 function esc(s){ return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c])); }
 const ENTER_FOCUS_KEYS=["action","exid","phase","setid","segmentid"];
@@ -853,12 +877,12 @@ function renderPhase(ex,phase,label){
           <div class="setNo">${i+1}</div>
           <div class="field">
             <span class="fieldLabel">重量${phase!=="main"?` ・ 本番1set比 ${weightPercent(ex,s,phase)}`:""}</span>
-            <input class="input" type="number" inputmode="decimal" step="0.25" min="0" data-action="set-weight" data-exid="${ex.id}" data-phase="${phase}" data-setid="${s.id}" value="${esc(s.weight)}" placeholder="重量">
+            <input class="input" type="text" inputmode="decimal" data-action="set-weight" data-exid="${ex.id}" data-phase="${phase}" data-setid="${s.id}" value="${esc(s.weight)}" placeholder="重量">
             <span class="suffix">kg</span>
           </div>
           <div class="field">
             <span class="fieldLabel">回数</span>
-            <input class="input" type="number" inputmode="numeric" step="1" min="0" data-action="set-reps" data-exid="${ex.id}" data-phase="${phase}" data-setid="${s.id}" value="${esc(s.reps)}" placeholder="回数">
+            <input class="input" type="text" inputmode="numeric" pattern="[0-9]*" data-action="set-reps" data-exid="${ex.id}" data-phase="${phase}" data-setid="${s.id}" value="${esc(s.reps)}" placeholder="回数">
             <span class="suffix">回</span>
           </div>
           <div class="field timeWrap">
@@ -884,9 +908,34 @@ function renderPhase(ex,phase,label){
     </div>
     ${phase==="main"?`<div class="prBox">
       <div class="prTitle"><span>過去の同種目・重量・セット順ごとの自己ベスト</span><span class="chip">重量昇順</span></div>
-      ${renderPRTable(ex.name)}
+      <div data-role="pr-table">${renderPRTable(ex.name)}</div>
     </div>`:""}
   </section>`;
+}
+function refreshStrengthDerivedDisplays(exid){
+  const ex=findExercise(exid);
+  const card=[...document.querySelectorAll(".exerciseCard")].find(el=>el.dataset.exid===exid);
+  if(!ex||!card||ex.type==="cardio")return;
+  card.querySelectorAll('[data-action="set-weight"]').forEach(input=>{
+    const phase=input.dataset.phase,setid=input.dataset.setid,sets=ex.blocks?.[phase]||[];
+    const index=sets.findIndex(set=>set.id===setid),set=sets[index];
+    if(!set)return;
+    const label=input.closest(".field")?.querySelector(".fieldLabel");
+    if(label)label.textContent=`重量${phase!=="main"?` ・ 本番1set比 ${weightPercent(ex,set,phase)}`:""}`;
+    const meta=input.closest(".setRow")?.querySelector(".rowMeta");
+    if(meta){
+      meta.replaceChildren();
+      const ordinal=sameWeightOrdinal(sets,index);
+      if(phase==="main"&&isNewPR(ex.name,set.weight,set.reps,ordinal)){
+        const badge=document.createElement("span");
+        badge.className="prCandidate";
+        badge.textContent=`★ ${set.weight}kg・同重量内${ordinal}セット目の自己ベスト候補`;
+        meta.append(badge);
+      }
+    }
+  });
+  const prTable=card.querySelector('[data-role="pr-table"]');
+  if(prTable)prTable.innerHTML=renderPRTable(ex.name);
 }
 function cardioTotals(ex){
   return (ex.cardioSegments||[]).reduce((total,s)=>{
@@ -937,7 +986,7 @@ function renderExercises(){
   }
   list.innerHTML=day.exercises.map(ex=>{
     const prevTip=previousTips(ex.name);
-    return `<article class="card exerciseCard">
+    return `<article class="card exerciseCard" data-exid="${ex.id}">
       <div class="exerciseTop">
         <div class="exerciseHead">
           <input class="input exerciseName" list="exerciseNames" data-action="exercise-name" data-exid="${ex.id}" value="${esc(ex.name)}" placeholder="種目名">
@@ -1109,6 +1158,9 @@ $("exerciseList").addEventListener("input",e=>{
 });
 $("exerciseList").addEventListener("change",e=>{
   const a=e.target.dataset.action;
+  if(a==="set-weight"||a==="set-reps"){
+    validateStrengthNumberInput(e.target);save();renderBodyTotals();refreshStrengthDerivedDisplays(e.target.dataset.exid);
+  }
   if(a==="cardio-time"){
     const normalized=validateTimeInput(e.target),segment=findCardioSegment(e.target.dataset.exid,e.target.dataset.segmentid);
     if(segment)segment.time=normalized??"";
@@ -1126,24 +1178,26 @@ $("exerciseList").addEventListener("change",e=>{
   if(a==="exercise-name"){
     const ex=findExercise(e.target.dataset.exid);if(ex&&autofillTargets(ex)){save();showToast("過去の履歴から部位を入力しました");}
   }
-  if(!enterNavigationInProgress&&["exercise-name","set-weight","set-reps","set-time","cardio-time"].includes(a))renderExercises();
+  if(!enterNavigationInProgress&&a==="exercise-name")renderExercises();
 });
 $("exerciseList").addEventListener("focusout",e=>{
   const a=e.target.dataset.action;
   if(a==="cardio-time"){
     const normalized=validateTimeInput(e.target),segment=findCardioSegment(e.target.dataset.exid,e.target.dataset.segmentid);
     if(segment)segment.time=normalized??"";
-    save();renderExercises();return;
+    save();return;
   }
   if(a==="set-time"){
     const normalized=validateTimeInput(e.target),s=findSet(e.target.dataset.exid,e.target.dataset.phase,e.target.dataset.setid);
     if(s)s.time=normalized??"";
-    save();renderExercises();renderBodyTotals();return;
+    save();renderBodyTotals();return;
   }
   if(a==="exercise-name"){
     const ex=findExercise(e.target.dataset.exid);if(ex)autofillTargets(ex);save();renderExercises();renderBodyTotals();return;
   }
-  if(!enterNavigationInProgress&&["set-weight","set-reps"].includes(a))renderExercises();
+  if(a==="set-weight"||a==="set-reps"){
+    validateStrengthNumberInput(e.target);save();renderBodyTotals();refreshStrengthDerivedDisplays(e.target.dataset.exid);
+  }
 });
 $("exerciseList").addEventListener("click",e=>{
   const b=e.target.closest("button[data-action]");if(!b)return;
